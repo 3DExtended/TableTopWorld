@@ -5,16 +5,23 @@ from typing import Sequence as _Sequence,\
                    Union as _Union
 import numpy as np
 
-set_global_fn(100)
+##############
+## Settings ##
+##############
 
-# d = cube(5) + sphere(5).right(5) - cylinder(r=2, h=6)
-# polyhedron(
-#   points=[ [10,10,0],[10,-10,0],[-10,-10,0],[-10,10,0], // the four points at base
-#            [0,0,10]  ],                                 // the apex point 
-#   faces=[ [0,1,4],[1,2,4],[2,3,4],[3,0,4],              // each triangle side
-#               [1,0,3],[2,1,3] ]                         // two triangles for square base
-#  );
-# h = polygon(points=[(0,0,0),(5,0,0),(5,5,0),(0,5,0)])
+resolution = 10
+hexagon_height = 1.3
+hexagon_outer_width = 5.1961525
+
+magnet_depth = 0.11 # inclusive of printer accuracy
+magnet_radius = 0.51 # inclusive of printer accuracy
+magnet_height_over_ground = 0.25 
+
+##########
+## Code ##
+##########
+
+set_global_fn(resolution)
 
 def generate_hexagon_vertecies(radius:float) -> list[_Tuple[float, float]]:
     vertices = []
@@ -38,31 +45,30 @@ def generate_hexagon(radius:float, center:_Tuple[float, float]|None=None):
     return hexagon, vertices
 
 # furthest points of hexagon
-hexagonSize = 5.1961525
 
 def convertOuterHexagonSizeToInnerSize(outerHexagonSize: float):
     angle_rad = math.radians(60 * 0)
-    temp_x_1 = hexagonSize * math.cos(angle_rad)
-    temp_y_1 = hexagonSize * math.sin(angle_rad)
+    temp_x_1 = outerHexagonSize * math.cos(angle_rad)
+    temp_y_1 = outerHexagonSize * math.sin(angle_rad)
     angle_rad = math.radians(60 * 1)
-    temp_x_2 = hexagonSize * math.cos(angle_rad)
-    temp_y_2 = hexagonSize * math.sin(angle_rad)
+    temp_x_2 = outerHexagonSize * math.cos(angle_rad)
+    temp_y_2 = outerHexagonSize * math.sin(angle_rad)
     innerHexagonSizeX = temp_x_1 + 0.5 * (temp_x_2-temp_x_1)
     innerHexagonSizeY = temp_y_1 + 0.5 * (temp_y_2-temp_y_1)
     innerHexagonSize = math.sqrt(innerHexagonSizeX**2 + innerHexagonSizeY**2)
     return innerHexagonSize
 
-innerHexagonSize = convertOuterHexagonSizeToInnerSize(hexagonSize)
+innerHexagonSize = convertOuterHexagonSizeToInnerSize(hexagon_outer_width)
 
-h = generate_hexagon(hexagonSize)[0]
+h = generate_hexagon(hexagon_outer_width)[0]
 outerHexagonVertecies:list[list[_Tuple[float, float]]] = []
 
 for i in range(6):
     angle_rad = math.radians(60 * i + 30)  # 60 degrees for each vertex
-    x = hexagonSize * math.cos(angle_rad)
-    y = hexagonSize * math.sin(angle_rad)
+    x = hexagon_outer_width * math.cos(angle_rad)
+    y = hexagon_outer_width * math.sin(angle_rad)
     magnitude = 1.0/math.sqrt(x**2 + y**2)
-    hexa, vert = generate_hexagon(hexagonSize, center=(magnitude*x*innerHexagonSize*2,magnitude*y*innerHexagonSize*2))
+    hexa, vert = generate_hexagon(hexagon_outer_width, center=(magnitude*x*innerHexagonSize*2,magnitude*y*innerHexagonSize*2))
     outerHexagonVertecies.append(vert)
     h = h + hexa
 
@@ -123,12 +129,10 @@ def addBevel(object, line: _Tuple[_Tuple[float, float, float], _Tuple[float, flo
         ])
     
     # then subtract triangle from object
-    object = object-triangle
+    object = object-(triangle.translateZ(hexagon_height))
     return object
 
-h = h.linear_extrude(height=1)
-
-h = addBevel(h, ((0,0,1.2),(5,0,1.2)), 0.3)
+h = h.linear_extrude(height=hexagon_height)
 
 def angle_with_x_axis(lineForHole: _Tuple[_Tuple[float, float], _Tuple[float, float]]):
     point1, point2 = lineForHole
@@ -160,18 +164,25 @@ def addMagnetHole(object, magnetHoleHeightAboveGround:float, magnetHoleRadius: f
     
     return object - cylinderTool
 
-print("Adding holes")
-
 for hexVerts in outerHexagonVertecies:
     length = hexVerts.__len__()
     for i in range(length):
         p1 = hexVerts[i]
         p2 = hexVerts[(i+1)%length]
-        h = addMagnetHole(h, 0.25, 0.55/2.0, 0.11, [p1,p2])
+        
+        # small optimization to no add holes everywhere... still not perfect though
+        angle_of_line = np.cross(np.array([p1[0], p1[1]]), np.array([p2[0], p2[1]]))
+        if angle_of_line > 0.1:
+            h = addMagnetHole(h, magnet_height_over_ground, magnet_radius/2.0, magnet_depth, [p1,p2])
+        
+        # TODO add me after everything is generated...
+        h = addBevel(h, ((p1[0],p1[1],1.2),(p2[0],p2[1],1.2)), 1.3)
+        
         
 print("finished descibing model")
 h.save_as_scad()
 print("finished save_as_scad")
+# takes ages but works eventually...
 # h.save_as_stl()
 print("Ran")
 
