@@ -4,12 +4,18 @@ from typing import Sequence as _Sequence,\
                    Tuple as _Tuple,\
                    Union as _Union
 import numpy as np
+from solid2.extensions.bosl2 import cuboid, regular_ngon, \
+                                    RIGHT, FRONT, BACK, BOT, CENTER, \
+                                    path_sweep, xdistribute
 
+from solid2.extensions.bosl2 import gears, beziers, screws, cubetruss
+
+from solid2.extensions.bosl2 import gears, beziers, screws, cubetruss
 ##############
 ## Settings ##
 ##############
 
-resolution = 10
+resolution = 100
 hexagon_height = 1.3
 hexagon_outer_width = 5.1961525
 
@@ -17,11 +23,22 @@ magnet_depth = 0.11 # inclusive of printer accuracy
 magnet_radius = 0.51 # inclusive of printer accuracy
 magnet_height_over_ground = 0.25 
 
+
+### Street
+
+generate_street = True
+street_entry_hexagon_index = 1
+street_exit_hexagon_index = 4
+street_indent_height = 0.1
+street_width_scalar = 0.95
+
 ##########
 ## Code ##
 ##########
 
 set_global_fn(resolution)
+set_global_fa(resolution)
+set_global_fs(resolution)
 
 def generate_hexagon_vertecies(radius:float) -> list[_Tuple[float, float]]:
     vertices = []
@@ -178,6 +195,84 @@ for hexVerts in outerHexagonVertecies:
         # TODO add me after everything is generated...
         h = addBevel(h, ((p1[0],p1[1],1.2),(p2[0],p2[1],1.2)), 1.3)
         
+        
+
+def getOuterHexFlowerLines(index:int)->_Tuple[_Tuple[_Tuple[float, float], _Tuple[float, float]], _Tuple[_Tuple[float, float], _Tuple[float, float]], _Tuple[_Tuple[float, float], _Tuple[float, float]]]:
+    # find matching hexagon indecies
+    top_hexagon_index = index % 6
+    hexagon_right_of_top_hex_index = (index - 1) % 6
+    
+    top_hexagon = outerHexagonVertecies[top_hexagon_index]
+    hexagon_right_of_top_hex = outerHexagonVertecies[hexagon_right_of_top_hex_index]
+
+    top_hex_line = (top_hexagon[(2+ index-1)%6], top_hexagon[(1+ index-1)%6])
+    top_right_hex_line = (top_hexagon[(2+ index-1-1)%6], top_hexagon[(2+ index-1-2)%6])
+    adjecent_hexagon_right_of_top_hex_line = (hexagon_right_of_top_hex[(2 + index -1) % 6], hexagon_right_of_top_hex[(1 + index -1) % 6])
+
+    return (top_hex_line, top_right_hex_line, adjecent_hexagon_right_of_top_hex_line)
+
+def getCenterOfThreeLines (lineA: _Tuple[_Tuple[float, float], _Tuple[float, float]], lineB: _Tuple[_Tuple[float, float], _Tuple[float, float]], lineC: _Tuple[_Tuple[float, float], _Tuple[float, float]])->tuple[float, float]:
+    center_of_three_lines_x = lineA[0][0] + 0.5 * (lineC[1][0]-lineA[0][0])
+    center_of_three_lines_y = lineA[0][1] + 0.5 * (lineC[1][1]-lineA[0][1])
+    center_of_three_lines = (center_of_three_lines_x, center_of_three_lines_y)
+    return center_of_three_lines
+
+
+if generate_street is True:
+    entry_line_a, entry_line_b, entry_line_c = getOuterHexFlowerLines(street_entry_hexagon_index)
+    center_of_entry_path = getCenterOfThreeLines(entry_line_a,entry_line_b,entry_line_c)
+
+    exit_line_a, exit_line_b, exit_line_c = getOuterHexFlowerLines(street_exit_hexagon_index)
+    center_of_exit_path = getCenterOfThreeLines(exit_line_a,exit_line_b,exit_line_c)
+
+    entry_line_direction = np.array([entry_line_c[1][0], entry_line_c[1][1], 0],) - np.array([entry_line_a[0][0], entry_line_a[0][1],0])
+    entry_line_direction_magnitude = np.linalg.norm(entry_line_direction)
+    
+    exit_line_direction = np.array([exit_line_c[1][0], exit_line_c[1][1], 0],) - np.array([exit_line_a[0][0], exit_line_a[0][1],0])
+    exit_line_direction_magnitude = np.linalg.norm(exit_line_direction)
+    
+    unit_direction = np.array([0, 0, -1])
+    perpendicular_vector_entry = np.cross(unit_direction, entry_line_direction * 1.0/entry_line_direction_magnitude)
+    perpendicular_vector_exit = np.cross(unit_direction, exit_line_direction * 1.0/exit_line_direction_magnitude)
+    
+    inline_controll_point_a = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) + 11 * perpendicular_vector_entry
+    inline_controll_point_b = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) + 11 * perpendicular_vector_exit
+    
+    # randomly inset controll points
+    inline_controll_point_c = inline_controll_point_a + entry_line_direction * 2 / entry_line_direction_magnitude
+    inline_controll_point_d = inline_controll_point_b + exit_line_direction * 2 / exit_line_direction_magnitude
+    
+    outer_controll_point_entry_a = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) - 5 * perpendicular_vector_entry
+    outer_controll_point_entry_b = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) - 5 * perpendicular_vector_entry
+    outer_controll_point_entry_c = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) - 5 * perpendicular_vector_entry
+    
+    outer_controll_point_exit_a = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - 5 * perpendicular_vector_exit
+    outer_controll_point_exit_b = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - 5 * perpendicular_vector_exit
+    outer_controll_point_exit_c = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - 5 * perpendicular_vector_exit
+    
+    # Calculate magnitude of the direction vector
+    street_width = np.linalg.norm(np.array([entry_line_c[1][0], entry_line_c[1][1]],) - np.array([entry_line_a[0][0], entry_line_a[0][1]])) * street_width_scalar
+    # since street shape is turned 45 degree, we must widen the street:
+    diagonaled_street_width = math.sqrt(((street_width)**2)*2)
+    
+    # Add first street using curves???
+    sbez = [
+        [outer_controll_point_entry_a[0],outer_controll_point_entry_a[1]],
+        [outer_controll_point_entry_b[0],outer_controll_point_entry_b[1]],
+        [outer_controll_point_entry_c[0],outer_controll_point_entry_c[1]],
+        [center_of_entry_path[0],center_of_entry_path[1]],
+        [inline_controll_point_c[0],inline_controll_point_c[1]],
+        [inline_controll_point_d[0],inline_controll_point_d[1]],
+        [center_of_exit_path[0],center_of_exit_path[1]],
+        [outer_controll_point_exit_c[0],outer_controll_point_exit_c[1]],
+        [outer_controll_point_exit_b[0],outer_controll_point_exit_b[1]],
+        [outer_controll_point_exit_a[0],outer_controll_point_exit_a[1]],
+    ]
+
+    s = path_sweep(regular_ngon(n=4,d=diagonaled_street_width,spin=45), beziers.bezpath_curve(sbez, N=3, splinesteps=resolution))
+
+    s = s.recolor("#99f").translateZ(street_width/2 + hexagon_height - street_indent_height)
+    h = h - s
         
 print("finished descibing model")
 h.save_as_scad()
