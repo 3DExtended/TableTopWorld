@@ -28,7 +28,7 @@ magnet_height_over_ground = 0.25
 
 generate_street = True
 street_entry_hexagon_index = 1
-street_exit_hexagon_index = 4
+street_exit_hexagon_index = 5
 street_indent_height = 0.1
 street_width_scalar = 0.95
 
@@ -146,8 +146,11 @@ def addBevel(object, line: _Tuple[_Tuple[float, float, float], _Tuple[float, flo
         ])
     
     # then subtract triangle from object
-    object = object-(triangle.translateZ(hexagon_height))
-    return object
+    if object is None:
+        return triangle.translateZ(hexagon_height)
+    else:
+        object = object-(triangle.translateZ(hexagon_height))
+        return object
 
 h = h.linear_extrude(height=hexagon_height)
 
@@ -271,9 +274,31 @@ if generate_street is True:
 
     s = path_sweep(regular_ngon(n=4,d=diagonaled_street_width,spin=45), beziers.bezpath_curve(sbez, N=3, splinesteps=resolution))
 
-    s = s.recolor("#99f").translateZ(street_width/2 + hexagon_height - street_indent_height)
-    h = h - s
-        
+    s = s.recolor("#99f")
+    
+    # add collection of bevels 
+    bevelsTool = None
+    for hexVerts in outerHexagonVertecies:
+        length = hexVerts.__len__()
+        for i in range(length):
+            p1 = hexVerts[i]
+            p2 = hexVerts[(i+1)%length]
+            
+            if bevelsTool is None:
+                bevelsTool = addBevel(None, ((p1[0],p1[1],1.2),(p2[0],p2[1],1.2)), 1.3)
+            else:
+                bevelsTool += addBevel(None, ((p1[0],p1[1],1.2),(p2[0],p2[1],1.2)), 1.3)
+    
+    # shrink bevels to street box sizes(union???)
+    bevelsTool = intersection()(bevelsTool,s)
+    
+    # combine bevels with street box (with correct translation)
+    s = s.translateZ(street_width/2 + hexagon_height- street_indent_height)
+    bevelsTool = bevelsTool.translateZ(-street_indent_height)
+    
+    h = h-s
+    h = h-bevelsTool
+    
 print("finished descibing model")
 h.save_as_scad()
 print("finished save_as_scad")
