@@ -27,9 +27,9 @@ magnet_height_over_ground = 0.25
 ### Street
 
 generate_street = True
-street_entry_hexagon_indecies = [(1,5),(1,3), (5,3)]
+street_entry_hexagon_indecies = [(3,5)] # (1,5),(1,3), (5,3)
 street_indent_height = 0.1
-street_width_scalar = 0.95
+street_width_scalar = 1
 
 ##########
 ## Code ##
@@ -260,22 +260,10 @@ if generate_street is True:
         exit_to_entry_vector = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - np.array([center_of_entry_path[0], center_of_entry_path[1], 0])
         size_of_exit_to_entry_vector = np.linalg.norm(exit_to_entry_vector)
         
+        center_of_hexagon = np.array([0.,0.,0.])
         
-        # randomly inset controll points
-        inline_controll_point_c = inline_controll_point_a + entry_line_direction * 2 / entry_line_direction_magnitude
-        inline_controll_point_d = inline_controll_point_b + exit_line_direction * 2 / exit_line_direction_magnitude
-        
-        outer_controll_point_entry_a = -20/ size_of_exit_to_entry_vector *exit_to_entry_vector + np.array([center_of_entry_path[0], center_of_entry_path[1], 0])
-        outer_controll_point_entry_b = -40/ size_of_exit_to_entry_vector *exit_to_entry_vector + np.array([center_of_entry_path[0], center_of_entry_path[1], 0])
-        outer_controll_point_entry_c = -60/ size_of_exit_to_entry_vector *exit_to_entry_vector + np.array([center_of_entry_path[0], center_of_entry_path[1], 0])
-        
-        # outer_controll_point_entry_a = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) - 5 * perpendicular_vector_entry
-        # outer_controll_point_entry_b = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) - 15 * perpendicular_vector_entry
-        # outer_controll_point_entry_c = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) - 25 * perpendicular_vector_entry
-        
-        outer_controll_point_exit_a = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - 4.8 * perpendicular_vector_exit
-        outer_controll_point_exit_b = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - 5.9 * perpendicular_vector_exit
-        outer_controll_point_exit_c = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - 6.9 * perpendicular_vector_exit
+        midpoint_of_street = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) 
+        midpoint_of_street *= 0.1 * 1/np.linalg.norm(midpoint_of_street)
         
         # Calculate magnitude of the direction vector
         street_width = np.linalg.norm(np.array([entry_line_c[1][0], entry_line_c[1][1]],) - np.array([entry_line_a[0][0], entry_line_a[0][1]])) * street_width_scalar
@@ -284,17 +272,31 @@ if generate_street is True:
         
         # Add first street using curves???
         sbez = [
-            [outer_controll_point_entry_a[0],outer_controll_point_entry_a[1]],
             [center_of_entry_path[0],center_of_entry_path[1]],
-            [inline_controll_point_c[0],inline_controll_point_c[1]],
-            [inline_controll_point_d[0],inline_controll_point_d[1]],
+            [-midpoint_of_street[0],-midpoint_of_street[1]],
+            [-center_of_hexagon[0],-center_of_hexagon[1]],
             [center_of_exit_path[0],center_of_exit_path[1]],
-            [outer_controll_point_exit_a[0],outer_controll_point_exit_a[1]],
         ]
 
         street_tool = path_sweep(regular_ngon(n=4,d=diagonaled_street_width,spin=45), beziers.bezpath_curve(sbez, N=sbez.__len__()-1, splinesteps=resolution))
 
         street_tool = street_tool.recolor("#99f")
+        
+        street_tool_entry_points = [
+            np.array(sbez[0])*0.9 ,
+            np.array([0.,0.]) + np.array([center_of_entry_path[0], center_of_entry_path[1]]) * 5,
+            np.array([0.,0.]) + np.array([center_of_entry_path[0], center_of_entry_path[1]]) * 10,
+        ]
+        street_tool_entry = path_sweep(regular_ngon(n=4,d=diagonaled_street_width,spin=45), beziers.bezpath_curve(street_tool_entry_points, N=street_tool_entry_points.__len__()-1, splinesteps=resolution))
+        street_tool += street_tool_entry
+        
+        street_tool_ending_points = [
+            np.array(sbez[sbez.__len__()-1])*0.9,
+            np.array([0.,0.]) + np.array([center_of_exit_path[0], center_of_exit_path[1]]) * 5,
+            np.array([0.,0.]) + np.array([center_of_exit_path[0], center_of_exit_path[1]]) * 10,
+        ]
+        street_tool_ending = path_sweep(regular_ngon(n=4,d=diagonaled_street_width,spin=45), beziers.bezpath_curve(street_tool_ending_points, N=street_tool_ending_points.__len__()-1, splinesteps=resolution))
+        street_tool += street_tool_ending
         
         # add collection of bevels 
         bevelsTool = None
