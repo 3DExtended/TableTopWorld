@@ -3,7 +3,7 @@ from solid2 import *
 from typing import Sequence as _Sequence,\
                    Tuple as _Tuple,\
                    Union as _Union
-                   
+import numpy as np
 
 set_global_fn(100)
 
@@ -53,6 +53,7 @@ def convertOuterHexagonSizeToInnerSize(outerHexagonSize: float):
 innerHexagonSize = convertOuterHexagonSizeToInnerSize(hexagonSize)
 
 h = generate_hexagon(hexagonSize)
+hex_org = generate_hexagon(hexagonSize)
 
 for i in range(6):
     angle_rad = math.radians(60 * i + 30)  # 60 degrees for each vertex
@@ -62,6 +63,80 @@ for i in range(6):
     
     h = h + generate_hexagon(hexagonSize, center=(magnitude*x*innerHexagonSize*2,magnitude*y*innerHexagonSize*2))
 
+
+def shift_line_3d(line, x, y, z):
+    p1, p2 = line  # Unpack the line into two endpoints
+    
+    # Calculate direction vector from p1 to p2
+    direction_vector = np.array([p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]])
+    
+    # Calculate magnitude of the direction vector
+    magnitude = np.linalg.norm(direction_vector)
+    
+    if magnitude == 0:
+        print("magnitude was 0")
+        return line  # Handle zero-length line case
+    
+    # Normalize the direction vector to get a unit vector
+    unit_direction = direction_vector / magnitude
+    
+    # Calculate two perpendicular vectors
+    if unit_direction[0] == 0 and unit_direction[1] == 0:
+        perpendicular_vector1 = np.array([1, 0, 0])
+        print("a")
+    else:
+        perpendicular_vector1 = np.array([-unit_direction[1], unit_direction[0], 0])
+    perpendicular_vector1 /= np.linalg.norm(perpendicular_vector1)
+    
+    perpendicular_vector2 = np.cross(unit_direction, perpendicular_vector1)
+    print("perpendicular_vector2")
+    print(perpendicular_vector2)
+    
+    # Shift endpoints along the perpendicular vectors
+    translated_p1 = p1 + x * perpendicular_vector1 + y * perpendicular_vector2 + z * unit_direction
+    translated_p2 = p2 + x * perpendicular_vector1 + y * perpendicular_vector2 + z * unit_direction
+    
+    # Create the shifted line
+    shifted_line = (tuple(translated_p1), tuple(translated_p2))
+    
+    return shifted_line
+
+
+
+def addBevel(object, line: _Tuple[_Tuple[float, float, float], _Tuple[float, float, float]], depth: float):
+    # Example usage:
+    shifted_line_1 = shift_line_3d(line, depth*0.75, 0, 0)
+    shifted_line_2 = shift_line_3d(line, -depth*0.75, 0, 0)
+    shifted_line_3 = shift_line_3d(line, 0, -depth, 0)
+    
+    print(line)
+    print(shifted_line_3)
+    
+    # first, construct a triangle on that line
+    triangle = polyhedron(
+        points=[
+            shifted_line_1[0], # 0
+            shifted_line_1[1], # 1
+            shifted_line_2[0], # 2
+            shifted_line_2[1], # 3
+            shifted_line_3[0], # 4
+            shifted_line_3[1], # 5
+        ],
+        faces=[
+            (0,2,4), (1,5,3), # end caps
+            (0,4,1),(4,5,1),(4,2,3),(5,4,3), # side panels
+            (2,0,1), (3,2,1) # top face
+        ])
+    
+    # then subtract triangle from object
+    object = object-triangle
+    return object
+
 h = h.linear_extrude(height=1)
 
+h = addBevel(h, ((0,0,1.2),(5,0,1.2)), 0.3)
+
 h.save_as_scad()
+h.save_as_stl()
+
+print("Ran")
