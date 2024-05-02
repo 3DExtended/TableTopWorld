@@ -27,8 +27,7 @@ magnet_height_over_ground = 0.25
 ### Street
 
 generate_street = True
-street_entry_hexagon_index = 1
-street_exit_hexagon_index = 5
+street_entry_hexagon_indecies = [(1,5),(1,3), (5,3)]
 street_indent_height = 0.1
 street_width_scalar = 0.95
 
@@ -124,21 +123,26 @@ def shift_line_3d(line, x, y, z):
     return shifted_line
 
 def addBevel(object, line: _Tuple[_Tuple[float, float, float], _Tuple[float, float, float]], depth: float):
-    # Example usage:
+    
+    line =( (line[0][0] + 0.0001*(line[1][0]-line[0][0]), line[0][1] + 0.0001*(line[1][1]-line[0][1]), line[0][2] + 0.0001*(line[1][2]-line[0][2])),
+            (line[1][0] + 0.0001*(line[0][0]-line[1][0]), line[1][1] + 0.0001*(line[0][1]-line[1][1]), line[1][2] + 0.0001*(line[0][2]-line[1][2])) )
+    
     shifted_line_1 = shift_line_3d(line, depth*0.75, 0, 0)
     shifted_line_2 = shift_line_3d(line, -depth*0.75, 0, 0)
     shifted_line_3 = shift_line_3d(line, 0, -depth, 0)
     
-    # first, construct a triangle on that line
-    triangle = polyhedron(
-        points=[
+    points = [
             shifted_line_1[0], # 0
             shifted_line_1[1], # 1
             shifted_line_2[0], # 2
             shifted_line_2[1], # 3
             shifted_line_3[0], # 4
             shifted_line_3[1], # 5
-        ],
+        ]
+    
+    # first, construct a triangle on that line
+    triangle = polyhedron(
+        points=points,
         faces=[
             (0,2,4), (1,5,3), # end caps
             (0,4,1),(4,5,1),(4,2,3),(5,4,3), # side panels
@@ -184,6 +188,8 @@ def addMagnetHole(object, magnetHoleHeightAboveGround:float, magnetHoleRadius: f
     
     return object - cylinderTool
 
+tools_to_remove = []
+tools_settings = []
 for hexVerts in outerHexagonVertecies:
     length = hexVerts.__len__()
     for i in range(length):
@@ -195,10 +201,16 @@ for hexVerts in outerHexagonVertecies:
         if angle_of_line > 0.1:
             h = addMagnetHole(h, magnet_height_over_ground, magnet_radius/2.0, magnet_depth, [p1,p2])
         
-        # TODO add me after everything is generated...
-        h = addBevel(h, ((p1[0],p1[1],1.2),(p2[0],p2[1],1.2)), 1.3)
-        
-        
+        # # TODO add me after everything is generated...
+        bevel_tool_settings = ((p1[0],p1[1],1.2),(p2[0],p2[1],1.2))
+        if bevel_tool_settings not in tools_settings:
+            tool = addBevel(None, bevel_tool_settings, 1.3)
+            tools_to_remove.append(tool)
+            tools_settings.append(bevel_tool_settings)
+        else:
+            print("skipped") 
+
+h = difference()(h,union()(tools_to_remove))
 
 def getOuterHexFlowerLines(index:int)->_Tuple[_Tuple[_Tuple[float, float], _Tuple[float, float]], _Tuple[_Tuple[float, float], _Tuple[float, float]], _Tuple[_Tuple[float, float], _Tuple[float, float]]]:
     # find matching hexagon indecies
@@ -222,87 +234,100 @@ def getCenterOfThreeLines (lineA: _Tuple[_Tuple[float, float], _Tuple[float, flo
 
 
 if generate_street is True:
-    entry_line_a, entry_line_b, entry_line_c = getOuterHexFlowerLines(street_entry_hexagon_index)
-    center_of_entry_path = getCenterOfThreeLines(entry_line_a,entry_line_b,entry_line_c)
+    subtractions_from_model = []
+    for streetIndexPair in street_entry_hexagon_indecies:
+        street_entry_hexagon_index, street_exit_hexagon_index = streetIndexPair
+        entry_line_a, entry_line_b, entry_line_c = getOuterHexFlowerLines(street_entry_hexagon_index)
+        center_of_entry_path = getCenterOfThreeLines(entry_line_a,entry_line_b,entry_line_c)
 
-    exit_line_a, exit_line_b, exit_line_c = getOuterHexFlowerLines(street_exit_hexagon_index)
-    center_of_exit_path = getCenterOfThreeLines(exit_line_a,exit_line_b,exit_line_c)
+        exit_line_a, exit_line_b, exit_line_c = getOuterHexFlowerLines(street_exit_hexagon_index)
+        center_of_exit_path = getCenterOfThreeLines(exit_line_a,exit_line_b,exit_line_c)
 
-    entry_line_direction = np.array([entry_line_c[1][0], entry_line_c[1][1], 0],) - np.array([entry_line_a[0][0], entry_line_a[0][1],0])
-    entry_line_direction_magnitude = np.linalg.norm(entry_line_direction)
-    
-    exit_line_direction = np.array([exit_line_c[1][0], exit_line_c[1][1], 0],) - np.array([exit_line_a[0][0], exit_line_a[0][1],0])
-    exit_line_direction_magnitude = np.linalg.norm(exit_line_direction)
-    
-    unit_direction = np.array([0, 0, -1])
-    perpendicular_vector_entry = np.cross(unit_direction, entry_line_direction * 1.0/entry_line_direction_magnitude)
-    perpendicular_vector_exit = np.cross(unit_direction, exit_line_direction * 1.0/exit_line_direction_magnitude)
-    
-    inline_controll_point_a = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) + 11 * perpendicular_vector_entry
-    inline_controll_point_b = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) + 11 * perpendicular_vector_exit
-    
-    # randomly inset controll points
-    inline_controll_point_c = inline_controll_point_a + entry_line_direction * 2 / entry_line_direction_magnitude
-    inline_controll_point_d = inline_controll_point_b + exit_line_direction * 2 / exit_line_direction_magnitude
-    
-    outer_controll_point_entry_a = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) - 5 * perpendicular_vector_entry
-    outer_controll_point_entry_b = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) - 5 * perpendicular_vector_entry
-    outer_controll_point_entry_c = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) - 5 * perpendicular_vector_entry
-    
-    outer_controll_point_exit_a = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - 5 * perpendicular_vector_exit
-    outer_controll_point_exit_b = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - 5 * perpendicular_vector_exit
-    outer_controll_point_exit_c = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - 5 * perpendicular_vector_exit
-    
-    # Calculate magnitude of the direction vector
-    street_width = np.linalg.norm(np.array([entry_line_c[1][0], entry_line_c[1][1]],) - np.array([entry_line_a[0][0], entry_line_a[0][1]])) * street_width_scalar
-    # since street shape is turned 45 degree, we must widen the street:
-    diagonaled_street_width = math.sqrt(((street_width)**2)*2)
-    
-    # Add first street using curves???
-    sbez = [
-        [outer_controll_point_entry_a[0],outer_controll_point_entry_a[1]],
-        [outer_controll_point_entry_b[0],outer_controll_point_entry_b[1]],
-        [outer_controll_point_entry_c[0],outer_controll_point_entry_c[1]],
-        [center_of_entry_path[0],center_of_entry_path[1]],
-        [inline_controll_point_c[0],inline_controll_point_c[1]],
-        [inline_controll_point_d[0],inline_controll_point_d[1]],
-        [center_of_exit_path[0],center_of_exit_path[1]],
-        [outer_controll_point_exit_c[0],outer_controll_point_exit_c[1]],
-        [outer_controll_point_exit_b[0],outer_controll_point_exit_b[1]],
-        [outer_controll_point_exit_a[0],outer_controll_point_exit_a[1]],
-    ]
+        entry_line_direction = np.array([entry_line_c[1][0], entry_line_c[1][1], 0],) - np.array([entry_line_a[0][0], entry_line_a[0][1],0])
+        entry_line_direction_magnitude = np.linalg.norm(entry_line_direction)
+        
+        exit_line_direction = np.array([exit_line_c[1][0], exit_line_c[1][1], 0],) - np.array([exit_line_a[0][0], exit_line_a[0][1],0])
+        exit_line_direction_magnitude = np.linalg.norm(exit_line_direction)
+        
+        unit_direction = np.array([0, 0, -1])
+        perpendicular_vector_entry = np.cross(unit_direction, entry_line_direction * 1.0/entry_line_direction_magnitude)
+        perpendicular_vector_exit = np.cross(unit_direction, exit_line_direction * 1.0/exit_line_direction_magnitude)
+        
+        inline_controll_point_a = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) + 11 * perpendicular_vector_entry
+        inline_controll_point_b = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) + 11 * perpendicular_vector_exit
+        
+        
+        exit_to_entry_vector = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - np.array([center_of_entry_path[0], center_of_entry_path[1], 0])
+        size_of_exit_to_entry_vector = np.linalg.norm(exit_to_entry_vector)
+        
+        
+        # randomly inset controll points
+        inline_controll_point_c = inline_controll_point_a + entry_line_direction * 2 / entry_line_direction_magnitude
+        inline_controll_point_d = inline_controll_point_b + exit_line_direction * 2 / exit_line_direction_magnitude
+        
+        outer_controll_point_entry_a = -20/ size_of_exit_to_entry_vector *exit_to_entry_vector + np.array([center_of_entry_path[0], center_of_entry_path[1], 0])
+        outer_controll_point_entry_b = -40/ size_of_exit_to_entry_vector *exit_to_entry_vector + np.array([center_of_entry_path[0], center_of_entry_path[1], 0])
+        outer_controll_point_entry_c = -60/ size_of_exit_to_entry_vector *exit_to_entry_vector + np.array([center_of_entry_path[0], center_of_entry_path[1], 0])
+        
+        # outer_controll_point_entry_a = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) - 5 * perpendicular_vector_entry
+        # outer_controll_point_entry_b = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) - 15 * perpendicular_vector_entry
+        # outer_controll_point_entry_c = np.array([center_of_entry_path[0], center_of_entry_path[1], 0]) - 25 * perpendicular_vector_entry
+        
+        outer_controll_point_exit_a = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - 4.8 * perpendicular_vector_exit
+        outer_controll_point_exit_b = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - 5.9 * perpendicular_vector_exit
+        outer_controll_point_exit_c = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - 6.9 * perpendicular_vector_exit
+        
+        # Calculate magnitude of the direction vector
+        street_width = np.linalg.norm(np.array([entry_line_c[1][0], entry_line_c[1][1]],) - np.array([entry_line_a[0][0], entry_line_a[0][1]])) * street_width_scalar
+        # since street shape is turned 45 degree, we must widen the street:
+        diagonaled_street_width = math.sqrt(((street_width)**2)*2)
+        
+        # Add first street using curves???
+        sbez = [
+            [outer_controll_point_entry_a[0],outer_controll_point_entry_a[1]],
+            [center_of_entry_path[0],center_of_entry_path[1]],
+            [inline_controll_point_c[0],inline_controll_point_c[1]],
+            [inline_controll_point_d[0],inline_controll_point_d[1]],
+            [center_of_exit_path[0],center_of_exit_path[1]],
+            [outer_controll_point_exit_a[0],outer_controll_point_exit_a[1]],
+        ]
 
-    s = path_sweep(regular_ngon(n=4,d=diagonaled_street_width,spin=45), beziers.bezpath_curve(sbez, N=3, splinesteps=resolution))
+        street_tool = path_sweep(regular_ngon(n=4,d=diagonaled_street_width,spin=45), beziers.bezpath_curve(sbez, N=sbez.__len__()-1, splinesteps=resolution))
 
-    s = s.recolor("#99f")
+        street_tool = street_tool.recolor("#99f")
+        
+        # add collection of bevels 
+        bevelsTool = None
+        for hexVerts in outerHexagonVertecies:
+            length = hexVerts.__len__()
+            for i in range(length):
+                p1 = hexVerts[i]
+                p2 = hexVerts[(i+1)%length]
+                
+                if bevelsTool is None:
+                    bevelsTool = addBevel(None, ((p1[0],p1[1],1.2),(p2[0],p2[1],1.2)), 1.3)
+                else:
+                    bevelsTool += addBevel(None, ((p1[0],p1[1],1.2),(p2[0],p2[1],1.2)), 1.3)
+        
+        # shrink bevels to street box sizes(union???)
+        bevelsTool = intersection()(bevelsTool,street_tool)
+        
+        # combine bevels with street box (with correct translation)
+        street_tool = street_tool.translateZ(street_width/2 + hexagon_height- street_indent_height)
+        subtractions_from_model.append(street_tool)
+        
+        bevelsTool = bevelsTool.translateZ(-street_indent_height)
+        subtractions_from_model.append(bevelsTool)
     
-    # add collection of bevels 
-    bevelsTool = None
-    for hexVerts in outerHexagonVertecies:
-        length = hexVerts.__len__()
-        for i in range(length):
-            p1 = hexVerts[i]
-            p2 = hexVerts[(i+1)%length]
-            
-            if bevelsTool is None:
-                bevelsTool = addBevel(None, ((p1[0],p1[1],1.2),(p2[0],p2[1],1.2)), 1.3)
-            else:
-                bevelsTool += addBevel(None, ((p1[0],p1[1],1.2),(p2[0],p2[1],1.2)), 1.3)
-    
-    # shrink bevels to street box sizes(union???)
-    bevelsTool = intersection()(bevelsTool,s)
-    
-    # combine bevels with street box (with correct translation)
-    s = s.translateZ(street_width/2 + hexagon_height- street_indent_height)
-    bevelsTool = bevelsTool.translateZ(-street_indent_height)
-    
-    h = h-s
-    h = h-bevelsTool
+    removeTool = union()(subtractions_from_model)
+    h = h - removeTool
     
 print("finished descibing model")
 h.save_as_scad()
 print("finished save_as_scad")
-# takes ages but works eventually...
+# takes ages and does not render bezier stuff...
+# h = h.scale(5)
 # h.save_as_stl()
 print("Ran")
+
 
