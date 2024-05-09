@@ -27,13 +27,19 @@ magnet_radius = 0.53  # inclusive of printer accuracy
 magnet_height_over_ground = 0.25
 
 # holes for toppings
-index_of_hexagons_for_toppings = [1, 6]
+index_of_hexagons_for_toppings = [1, 2]
 
 # Street
 generate_street = True
-street_entry_hexagon_indecies = [(3, 5)]
+street_entry_hexagon_indecies = [(0, 4)]
 street_indent_height = 0.1
 street_width_scalar = 1
+
+# Water
+generate_water = True
+water_entry_hexagon_indecies = [(3, 5)]
+water_indent_height = -0.58
+water_width_scalar = 0.75
 
 ##########
 ## Code ##
@@ -431,6 +437,125 @@ if generate_street is True:
 
     for i in range(all_hexagon_objects.__len__()):
         all_hexagon_objects[i] = all_hexagon_objects[i] - removeTool
+
+
+if generate_water is True:
+    subtractions_from_model = []
+    counter = 0
+    for waterIndexPair in water_entry_hexagon_indecies:
+        counter += 1
+        water_entry_hexagon_index, water_exit_hexagon_index = waterIndexPair
+        entry_line_a, entry_line_b, entry_line_c = getOuterHexFlowerLines(
+            water_entry_hexagon_index)
+        center_of_entry_path = getCenterOfThreeLines(
+            entry_line_a, entry_line_b, entry_line_c)
+
+        exit_line_a, exit_line_b, exit_line_c = getOuterHexFlowerLines(
+            water_exit_hexagon_index)
+        center_of_exit_path = getCenterOfThreeLines(
+            exit_line_a, exit_line_b, exit_line_c)
+
+        entry_line_direction = np.array(
+            [entry_line_c[1][0], entry_line_c[1][1], 0],) - np.array([entry_line_a[0][0], entry_line_a[0][1], 0])
+        entry_line_direction_magnitude = np.linalg.norm(entry_line_direction)
+
+        exit_line_direction = np.array(
+            [exit_line_c[1][0], exit_line_c[1][1], 0],) - np.array([exit_line_a[0][0], exit_line_a[0][1], 0])
+        exit_line_direction_magnitude = np.linalg.norm(exit_line_direction)
+
+        unit_direction = np.array([0, 0, -1])
+        perpendicular_vector_entry = np.cross(
+            unit_direction, entry_line_direction * 1.0/entry_line_direction_magnitude)
+        perpendicular_vector_exit = np.cross(
+            unit_direction, exit_line_direction * 1.0/exit_line_direction_magnitude)
+
+        inline_controll_point_a = np.array(
+            [center_of_entry_path[0], center_of_entry_path[1], 0]) + 11 * perpendicular_vector_entry
+        inline_controll_point_b = np.array(
+            [center_of_exit_path[0], center_of_exit_path[1], 0]) + 11 * perpendicular_vector_exit
+
+        exit_to_entry_vector = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - np.array([
+            center_of_entry_path[0], center_of_entry_path[1], 0])
+        size_of_exit_to_entry_vector = np.linalg.norm(exit_to_entry_vector)
+
+        center_of_hexagon = np.array([0., 0., 0.])
+
+        midpoint_of_water = np.array([center_of_exit_path[0], center_of_exit_path[1], 0]) - \
+            np.array([center_of_entry_path[0], center_of_entry_path[1], 0])
+        midpoint_of_water *= 0.1 * 1/np.linalg.norm(midpoint_of_water)
+
+        # Calculate magnitude of the direction vector
+        water_width = np.linalg.norm(np.array([entry_line_c[1][0], entry_line_c[1][1]],) - np.array(
+            [entry_line_a[0][0], entry_line_a[0][1]])) * water_width_scalar
+        # since water shape is turned 45 degree, we must widen the water:
+        diagonaled_water_width = math.sqrt(((water_width)**2)*2)
+
+        # Add first water using curves???
+        sbez = [
+            [center_of_entry_path[0], center_of_entry_path[1]],
+            [-midpoint_of_water[0], -midpoint_of_water[1]],
+            [-center_of_hexagon[0], -center_of_hexagon[1]],
+            [center_of_exit_path[0], center_of_exit_path[1]],
+        ]
+
+        water_tool = path_sweep(regular_ngon(n=6, d=diagonaled_water_width, spin=60), beziers.bezpath_curve(
+            sbez, N=sbez.__len__()-1, splinesteps=resolution))
+
+        water_tool = water_tool.recolor("#99f")
+
+        water_tool_entry_points = [
+            np.array(sbez[0])*0.9,
+            np.array([0., 0.]) + np.array([center_of_entry_path[0],
+                                           center_of_entry_path[1]]) * 5,
+            np.array([0., 0.]) + np.array([center_of_entry_path[0],
+                                           center_of_entry_path[1]]) * 10,
+        ]
+        water_tool_entry = path_sweep(regular_ngon(n=6, d=diagonaled_water_width, spin=60), beziers.bezpath_curve(
+            water_tool_entry_points, N=water_tool_entry_points.__len__()-1, splinesteps=resolution))
+        water_tool += water_tool_entry
+
+        water_tool_ending_points = [
+            np.array(sbez[sbez.__len__()-1])*0.9,
+            np.array([0., 0.]) + np.array([center_of_exit_path[0],
+                                           center_of_exit_path[1]]) * 5,
+            np.array([0., 0.]) + np.array([center_of_exit_path[0],
+                                           center_of_exit_path[1]]) * 10,
+        ]
+        water_tool_ending = path_sweep(regular_ngon(n=6, d=diagonaled_water_width, spin=60), beziers.bezpath_curve(
+            water_tool_ending_points, N=water_tool_ending_points.__len__()-1, splinesteps=resolution))
+        water_tool += water_tool_ending
+
+        # add collection of bevels
+        bevelsTool = None
+        for hexVerts in outerHexagonVertecies:
+            length = hexVerts.__len__()
+            for i in range(length):
+                p1 = hexVerts[i]
+                p2 = hexVerts[(i+1) % length]
+
+                if bevelsTool is None:
+                    bevelsTool = addBevel(
+                        None, ((p1[0], p1[1], 1.2), (p2[0], p2[1], 1.2)), hexagon_bavel_size)
+                else:
+                    bevelsTool += addBevel(
+                        None, ((p1[0], p1[1], 1.2), (p2[0], p2[1], 1.2)), hexagon_bavel_size)
+
+        # shrink bevels to water box sizes(union???)
+        bevelsTool = intersection()(bevelsTool, water_tool)
+
+        # combine bevels with water box (with correct translation)
+        water_tool = water_tool.translateZ(
+            water_width/2 + hexagon_height - water_indent_height + counter*0.00001)
+        subtractions_from_model.append(water_tool)
+
+        bevelsTool = bevelsTool.translateZ(-water_indent_height)
+        # subtractions_from_model.append(bevelsTool)
+
+    removeTool = union()(subtractions_from_model)
+
+    for i in range(all_hexagon_objects.__len__()):
+        all_hexagon_objects[i] = all_hexagon_objects[i] - removeTool
+
 
 h = union()(all_hexagon_objects)
 
