@@ -34,3 +34,22 @@ def test_junction_center_inside_flower(layout: FlowerLayout) -> None:
 def test_invalid_junction_raises(layout: FlowerLayout) -> None:
     with pytest.raises(ValueError):
         layout.junction_lines(6)
+
+
+def test_exterior_edges_face_away_from_flower_center(layout: FlowerLayout) -> None:
+    """Each exterior edge midpoint is farther from origin than its hex center."""
+    origin = (0.0, 0.0)
+    for edge in layout.exterior_edges():
+        center = layout.cell_center(edge.hex_idx)
+        p1, p2 = edge.line_2d
+        mid = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
+        dist_mid = (mid[0] - origin[0]) ** 2 + (mid[1] - origin[1]) ** 2
+        dist_center = (center[0] - origin[0]) ** 2 + (center[1] - origin[1]) ** 2
+        assert dist_mid > dist_center + 1e-12, edge.key
+
+
+def test_exterior_edge_outward_normal(layout: FlowerLayout) -> None:
+    """transform_edge_to_world normal points away from the flower origin."""
+    for edge in layout.exterior_edges():
+        mid, normal, _ = layout.transform_edge_to_world(edge, (0.0, 0.0), 0)
+        assert mid[0] * normal[0] + mid[1] * normal[1] > 0, edge.key

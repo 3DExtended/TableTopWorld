@@ -143,7 +143,7 @@ class FeatureCutters:
         tileset: Tileset,
     ) -> OpenSCADObject:
         max_z = max(tileset.terrain_z(h.terrain) for h in flower.hexes.values())
-        host_z = max(max_z, 2.0)
+        host_z = max_z
         subtractions: list[OpenSCADObject] = []
         counter = 0
         for entry_j, exit_j in flower.roads:

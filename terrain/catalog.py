@@ -129,18 +129,26 @@ class EdgeProfileCatalog:
             return len(info_a.mates_with) == 1
         return True
 
+    FLAT_MATING_PROFILES: frozenset[str] = frozenset(
+        {FLAT_GROUND, FLAT_MIDDLE, FLAT_HIGH}
+    )
+
+    def is_flat_mating_profile(self, profile: str) -> bool:
+        return profile in self.FLAT_MATING_PROFILES
+
+    def is_mating_profile(self, profile: str) -> bool:
+        """Exterior edges that connect to another flower (flat, slope pairs; not cliffs)."""
+        if profile not in self._profiles:
+            return False
+        return not profile.startswith("cliff_")
+
     def elevation_at_edge(self, profile: str) -> Optional[float]:
         """Nominal terrain Z at the exterior edge for flat profiles."""
         if profile not in self._profiles:
             return None
+        if not self.is_flat_mating_profile(profile):
+            return None
         level = self._profiles[profile].level
-        if profile.startswith("slope_up"):
-            return TERRAIN_Z[level]
-        if profile.startswith("slope_down"):
-            # down profiles store the higher side's level in our defs
-            return TERRAIN_Z[level]
-        if profile.startswith("cliff"):
-            return TERRAIN_Z[level]
         return TERRAIN_Z.get(level)
 
     def validate_profile_name(self, profile: str) -> None:

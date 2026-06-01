@@ -18,7 +18,9 @@ def test_load_default_tileset() -> None:
 def test_model_step_from_meta() -> None:
     tileset = load_tileset(DEFAULT)
     assert tileset.meta.model_step == 4.0
+    assert tileset.terrain_z("ground") == TERRAIN_Z["ground"]
     assert tileset.terrain_z("middle") == TERRAIN_Z["middle"]
+    assert tileset.terrain_z("high") == TERRAIN_Z["high"]
     assert tileset.water_z("ground") == -4.0
 
 

@@ -211,6 +211,14 @@ def validate_tileset(
 ) -> None:
     catalog = catalog or EdgeProfileCatalog()
     layout = layout or tileset.layout()
+    step = tileset.meta.model_step
+    for i, level in enumerate(TERRAIN_LEVELS):
+        expected = i * step
+        if TERRAIN_Z[level] != expected:
+            raise TilesetError(
+                f"TERRAIN_Z[{level!r}] is {TERRAIN_Z[level]}, "
+                f"expected {expected} (level_index * model_step)"
+            )
     for fid, flower in tileset.flowers.items():
         standable = sum(1 for h in flower.hexes.values() if h.role == "standable")
         if standable < 1:

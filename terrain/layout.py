@@ -141,17 +141,42 @@ class FlowerLayout:
             ]
         return self._ring_vertices[hex_idx - 1]
 
-    def exterior_edge_line(self, hex_idx: int, side_idx: int) -> Line2D:
-        """Outward edge segment for ring hex (matches legacy vertex indexing)."""
+    def exterior_vertex_indices(self, hex_idx: int) -> tuple[int, int, int]:
+        """Vertex indices i for the three edges (i, i+1) on the flower exterior.
+
+        Ring hexes share the same local vertex winding but sit at different angles
+        around the center, so outward edges are not the same index triple on every
+        hex. side_idx 0..2 maps to these indices in CCW order around the cell.
+        """
         if hex_idx not in self.RING_HEX_INDICES:
             raise ValueError(f"hex {hex_idx} has no exterior edges")
+        verts = self.ring_vertices(hex_idx)
+        center = self.cell_center(hex_idx)
+        dist_center = math.hypot(center[0], center[1])
+        candidates: list[tuple[float, int]] = []
+        for i in range(6):
+            p1, p2 = verts[i], verts[(i + 1) % 6]
+            mid = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
+            if math.hypot(mid[0], mid[1]) <= dist_center + 1e-9:
+                continue
+            angle = math.atan2(mid[1] - center[1], mid[0] - center[0])
+            candidates.append((angle, i))
+        if len(candidates) != self.EXTERIOR_SIDES_PER_HEX:
+            found = [i for _, i in candidates]
+            raise RuntimeError(
+                f"hex {hex_idx}: expected {self.EXTERIOR_SIDES_PER_HEX} exterior edges, "
+                f"found {len(candidates)} ({found})"
+            )
+        candidates.sort(key=lambda item: item[0])
+        return (candidates[0][1], candidates[1][1], candidates[2][1])
+
+    def exterior_edge_line(self, hex_idx: int, side_idx: int) -> Line2D:
+        """Outward-facing edge segment for a ring hex side (0..2)."""
         if side_idx not in range(self.EXTERIOR_SIDES_PER_HEX):
             raise ValueError(f"side {side_idx} out of range for hex {hex_idx}")
         verts = self.ring_vertices(hex_idx)
-        # Legacy getOuterHexFlowerLines uses indices (2+index-1)%6 etc. for junction 0
-        # on hex 1: sides map to vertex pairs used in bevel/magnet code
-        vi = (2 + side_idx) % 6
-        vj = (1 + side_idx) % 6
+        vi = self.exterior_vertex_indices(hex_idx)[side_idx]
+        vj = (vi + 1) % 6
         return (verts[vi], verts[vj])
 
     def exterior_edges(self) -> list[ExteriorEdge]:

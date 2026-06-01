@@ -26,6 +26,13 @@ def test_slope_pairs_compatible(catalog: EdgeProfileCatalog) -> None:
 def test_elevation_at_edge(catalog: EdgeProfileCatalog) -> None:
     assert catalog.elevation_at_edge("flat_high") == 8.0
     assert catalog.elevation_at_edge("flat_ground") == 0.0
+    assert catalog.elevation_at_edge("slope_up_ground_to_middle") is None
+
+
+def test_flat_mating_profiles(catalog: EdgeProfileCatalog) -> None:
+    assert catalog.is_flat_mating_profile("flat_ground")
+    assert not catalog.is_flat_mating_profile("slope_up_ground_to_middle")
+    assert not catalog.is_flat_mating_profile("cliff_ground")
 
 
 def test_unknown_profile_raises(catalog: EdgeProfileCatalog) -> None:
