@@ -12,6 +12,10 @@ def test_exterior_edge_count(layout: FlowerLayout) -> None:
     assert len(layout.exterior_edge_keys()) == 18
 
 
+def test_hex_bevel_edge_count(layout: FlowerLayout) -> None:
+    assert len(layout.hex_bevel_edges()) == 7 * FlowerLayout.EDGES_PER_HEX
+
+
 def test_edge_id_roundtrip(layout: FlowerLayout) -> None:
     assert FlowerLayout.edge_id(3, 1) == "3-1"
     assert FlowerLayout.parse_edge_id("3-1") == (3, 1)

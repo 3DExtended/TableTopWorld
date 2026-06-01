@@ -64,11 +64,23 @@ class ExteriorEdge:
     line_2d: Line2D
 
 
+@dataclass(frozen=True)
+class HexBevelEdge:
+    """One of six sides on a flower cell; chamfer targets the hex top rim."""
+
+    key: str
+    hex_idx: int
+    edge_idx: int
+    line_2d: Line2D
+
+
 class FlowerLayout:
     """Flower graph: 7 cells, 18 exterior edges, 6 road/water junctions."""
 
     # Ring hex 1–6; sides 0–2 are outward-facing (legacy keys "h-s").
     RING_HEX_INDICES = tuple(range(1, 7))
+    HEX_CELL_COUNT = 7
+    EDGES_PER_HEX = 6
     EXTERIOR_SIDES_PER_HEX = 3
     JUNCTION_COUNT = 6
 
@@ -178,6 +190,30 @@ class FlowerLayout:
         vi = self.exterior_vertex_indices(hex_idx)[side_idx]
         vj = (vi + 1) % 6
         return (verts[vi], verts[vj])
+
+    def hex_edge_line(self, hex_idx: int, edge_idx: int) -> Line2D:
+        """CCW edge segment on a cell (edge_idx 0..5 joins vertex i to i+1)."""
+        if hex_idx not in range(self.HEX_CELL_COUNT):
+            raise ValueError(f"hex {hex_idx} out of range")
+        if edge_idx not in range(self.EDGES_PER_HEX):
+            raise ValueError(f"edge {edge_idx} out of range for hex {hex_idx}")
+        verts = self.ring_vertices(hex_idx)
+        return (verts[edge_idx], verts[(edge_idx + 1) % self.EDGES_PER_HEX])
+
+    def hex_bevel_edges(self) -> list[HexBevelEdge]:
+        """All six sides of every flower cell (magnets use exterior_edges only)."""
+        edges: list[HexBevelEdge] = []
+        for hex_idx in range(self.HEX_CELL_COUNT):
+            for edge_idx in range(self.EDGES_PER_HEX):
+                edges.append(
+                    HexBevelEdge(
+                        key=self.edge_id(hex_idx, edge_idx),
+                        hex_idx=hex_idx,
+                        edge_idx=edge_idx,
+                        line_2d=self.hex_edge_line(hex_idx, edge_idx),
+                    )
+                )
+        return edges
 
     def exterior_edges(self) -> list[ExteriorEdge]:
         edges: list[ExteriorEdge] = []

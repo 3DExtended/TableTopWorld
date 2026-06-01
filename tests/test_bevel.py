@@ -23,13 +23,30 @@ def test_bevel_cutter_side_below_top_at_z_anchor() -> None:
     layout = tileset.layout()
     builder = FlowerMeshBuilder(tileset)
     builder.build_hex_solid(flower, 1)
-    edge = next(e for e in layout.exterior_edges() if e.key == "1-0")
+    ext = next(e for e in layout.exterior_edges() if e.key == "1-0")
+    edge = next(
+        e
+        for e in layout.hex_bevel_edges()
+        if e.hex_idx == 1
+        and (
+            e.line_2d == ext.line_2d
+            or e.line_2d == (ext.line_2d[1], ext.line_2d[0])
+        )
+    )
     z_anchor = BASE_PLATE_DEPTH
     line_3d = (
         (edge.line_2d[0][0], edge.line_2d[0][1], z_anchor),
         (edge.line_2d[1][0], edge.line_2d[1][1], z_anchor),
     )
-    tool_scad = str(add_bevel(None, line_3d, HEXAGON_BEVEL_SIZE, z_anchor))
+    tool_scad = str(
+        add_bevel(
+            None,
+            line_3d,
+            HEXAGON_BEVEL_SIZE,
+            z_anchor,
+            toward_xy=layout.cell_center(1),
+        )
+    )
     z_side = z_anchor - BEVEL_Z_INSET
     assert tool_scad.count(f"translate(v = [0, 0, {z_side}])") == 1
     assert tool_scad.count(f"translate(v = [0, 0, {z_anchor}])") == 1
@@ -48,14 +65,26 @@ def test_bevel_top_wedge_inward_offset() -> None:
     from terrain.edges import _bevel_line_xy, _bevel_top_shelf_wedge
 
     layout = FlowerLayout()
-    edge = next(e for e in layout.exterior_edges() if e.key == "1-0")
+    ext = next(e for e in layout.exterior_edges() if e.key == "1-0")
+    edge = next(
+        e
+        for e in layout.hex_bevel_edges()
+        if e.hex_idx == 1
+        and (
+            e.line_2d == ext.line_2d
+            or e.line_2d == (ext.line_2d[1], ext.line_2d[0])
+        )
+    )
     line_xy = _bevel_line_xy(
         (
             (edge.line_2d[0][0], edge.line_2d[0][1], BASE_PLATE_DEPTH),
             (edge.line_2d[1][0], edge.line_2d[1][1], BASE_PLATE_DEPTH),
         )
     )
-    scad = str(_bevel_top_shelf_wedge(line_xy, HEXAGON_BEVEL_SIZE))
+    from terrain.edges import _bevel_needs_flip
+
+    assert not _bevel_needs_flip(line_xy, layout.cell_center(1))
+    scad = str(_bevel_top_shelf_wedge(line_xy, HEXAGON_BEVEL_SIZE, flip=False))
     import re
 
     nums = [float(x) for x in re.findall(r"[-+]?\d*\.\d+|\d+", scad.split("points = ")[1].split("]")[0])]
@@ -86,13 +115,28 @@ def test_bevel_subtracts_from_ground_hex() -> None:
     layout = tileset.layout()
     builder = FlowerMeshBuilder(tileset)
     base = builder.build_hex_solid(flower, 1)
-    edge = next(e for e in layout.exterior_edges() if e.key == "1-0")
+    ext = next(e for e in layout.exterior_edges() if e.key == "1-0")
+    edge = next(
+        e
+        for e in layout.hex_bevel_edges()
+        if e.hex_idx == 1
+        and (
+            e.line_2d == ext.line_2d
+            or e.line_2d == (ext.line_2d[1], ext.line_2d[0])
+        )
+    )
     z_anchor = builder.hex_top_z(flower, 1)
     line_3d = (
         (edge.line_2d[0][0], edge.line_2d[0][1], z_anchor),
         (edge.line_2d[1][0], edge.line_2d[1][1], z_anchor),
     )
-    solid = add_bevel(base, line_3d, HEXAGON_BEVEL_SIZE, z_anchor)
+    solid = add_bevel(
+        base,
+        line_3d,
+        HEXAGON_BEVEL_SIZE,
+        z_anchor,
+        toward_xy=layout.cell_center(1),
+    )
     assert z_anchor == BASE_PLATE_DEPTH
     scad = str(solid)
     assert "difference()" in scad

@@ -65,7 +65,7 @@ All tests (unit + visual): `.venv/bin/python -m pytest tests/ -q`
 | 13 | `13_single_magnet.scad` | Ground hex slab z=0–2; fixed-height magnet bore on edge 1-0. |
 | 14 | `14_single_bevel.scad` | High hex 3; chamfer on edge 3-0 — side wedge, sloped top wedge, and flat top box (three cutters). |
 | 15 | `15_all_magnets_ground_plateau.scad` | Flat 7-hex plate, 18 magnet holes on outer rim. |
-| 16 | `16_bevels_on_height_step.scad` | Height-step union with chamfered top edges. |
+| 16 | `16_bevels_on_height_step.scad` | Height-step union with chamfer on all seven hex cells (42 sides). |
 
 ### Layer 4 — `04_features/`
 

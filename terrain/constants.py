@@ -14,8 +14,8 @@ MAGNET_RADIUS = 0.53
 MAGNET_HEIGHT_OVER_GROUND = 0.25
 MAGNET_CENTER_Z = MAGNET_HEIGHT_OVER_GROUND + MAGNET_RADIUS
 
-# Bevels (model units; × meta.scale for mm — 0.7 × 5 ≈ 3.5 mm chamfer depth)
-HEXAGON_BEVEL_SIZE = 0.7
+# Bevels (model units; × meta.scale for mm — 0.175 × 5 ≈ 0.9 mm chamfer depth)
+HEXAGON_BEVEL_SIZE = 0.175
 # Side wedge sits this far below z_anchor to avoid coplanar fights on the vertical face.
 BEVEL_Z_INSET = 0.02
 # Top rim box extends ± this depth around z_anchor so the flat face fully clears in CSG.

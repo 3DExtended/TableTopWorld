@@ -1,4 +1,4 @@
-"""Exterior edge bevels and magnet holes."""
+"""Per-hex top-rim bevels and exterior magnet holes."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from terrain.constants import (
     MAGNET_DEPTH,
     MAGNET_RADIUS,
 )
-from terrain.layout import FlowerLayout, Line3D
+from terrain.layout import FlowerLayout, Line3D, Point2D
 
 if TYPE_CHECKING:
     from solid2 import OpenSCADObject
@@ -93,24 +93,28 @@ def _bevel_polyhedron(
     )
 
 
-def _bevel_side_wedge(line: Line3D, depth: float) -> OpenSCADObject:
-    """Chamfer on the exterior vertical wall (legacy orientation: +0.75d is inward)."""
+def _bevel_side_wedge(line: Line3D, depth: float, *, flip: bool = False) -> OpenSCADObject:
+    """Chamfer on the vertical wall beside the edge (+0.75d along first perpendicular)."""
+    sign = -1.0 if flip else 1.0
     line_in = shift_line_3d(line, depth * 0.75, 0, 0)
     line_out = shift_line_3d(line, -depth * 0.75, 0, 0)
-    line_apex = shift_line_3d(line, 0, -depth, 0)
+    line_apex = shift_line_3d(line, 0, sign * -depth, 0)
     return _bevel_polyhedron(line_in, line_out, line_apex)
 
 
-def _bevel_top_shelf_wedge(line: Line3D, depth: float) -> OpenSCADObject:
-    """Sloped cut from the exterior edge toward hex interior (45° top chamfer)."""
+def _bevel_top_shelf_wedge(line: Line3D, depth: float, *, flip: bool = False) -> OpenSCADObject:
+    """Sloped cut from the edge toward hex interior (45° top chamfer)."""
+    sign = -1.0 if flip else 1.0
     line_in = shift_line_3d(line, depth * 0.75, 0, 0)
-    line_apex = shift_line_3d(line, depth * 0.75, depth, 0)
+    line_apex = shift_line_3d(line, depth * 0.75, sign * depth, 0)
     return _bevel_polyhedron(line_in, line, line_apex)
 
 
-def _bevel_top_flat_box(line: Line3D, depth: float) -> OpenSCADObject:
+def _bevel_top_flat_box(line: Line3D, depth: float, *, flip: bool = False) -> OpenSCADObject:
     """Axis-aligned box along the edge; bites through the flat top face at z_anchor."""
     inward = depth * 0.75
+    if flip:
+        inward = -inward
     half = BEVEL_TOP_SLAB_DEPTH / 2
     edge_lo = shift_line_3d(line, 0, -half, 0)
     edge_hi = shift_line_3d(line, 0, half, 0)
@@ -143,19 +147,33 @@ def _bevel_top_flat_box(line: Line3D, depth: float) -> OpenSCADObject:
     return polyhedron(points=points, faces=faces)
 
 
+def _bevel_needs_flip(line_xy: Line3D, toward_xy: Point2D) -> bool:
+    """True when the default cutter points away from toward_xy (hex cell center)."""
+    probe = shift_line_3d(line_xy, 0.075, 0, 0)
+    p0, p1 = line_xy[0], line_xy[1]
+    mid = ((p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2)
+    to_target = (toward_xy[0] - mid[0], toward_xy[1] - mid[1])
+    to_in = (probe[0][0] - mid[0], probe[0][1] - mid[1])
+    return to_target[0] * to_in[0] + to_target[1] * to_in[1] < 0
+
+
 def add_bevel(
     obj: OpenSCADObject | None,
     line: Line3D,
     depth: float,
     z_anchor: float,
+    *,
+    toward_xy: Point2D | None = None,
 ) -> OpenSCADObject:
-    """Subtract chamfer at z_anchor through the top exterior corner."""
+    """Subtract chamfer at z_anchor through the top outer corner along the edge."""
     line_xy = _bevel_line_xy(line)
+    flip = _bevel_needs_flip(line_xy, toward_xy) if toward_xy is not None else False
     z_side = z_anchor - BEVEL_Z_INSET
     top = (
-        _bevel_top_shelf_wedge(line_xy, depth) + _bevel_top_flat_box(line_xy, depth)
+        _bevel_top_shelf_wedge(line_xy, depth, flip=flip)
+        + _bevel_top_flat_box(line_xy, depth, flip=flip)
     ).translateZ(z_anchor)
-    tool = _bevel_side_wedge(line_xy, depth).translateZ(z_side) + top
+    tool = _bevel_side_wedge(line_xy, depth, flip=flip).translateZ(z_side) + top
     if obj is None:
         return tool
     return obj - tool
@@ -194,7 +212,7 @@ def add_magnet_hole_on_side(
 
 
 class EdgeGeometry:
-    """Apply exterior bevels and magnets to a flower solid."""
+    """Apply per-hex top-rim bevels and exterior magnets to a flower solid."""
 
     def __init__(self, layout: FlowerLayout, bevel_size: float = HEXAGON_BEVEL_SIZE) -> None:
         self.layout = layout
@@ -221,18 +239,27 @@ class EdgeGeometry:
         hex_top_z: Callable[[int], float],
     ) -> OpenSCADObject:
         tools: list[OpenSCADObject] = []
-        tool_settings: list[Line3D] = []
+        seen: set[tuple[str, float]] = set()
 
-        for edge in self.layout.exterior_edges():
+        for edge in self.layout.hex_bevel_edges():
             z_anchor = hex_top_z(edge.hex_idx)
+            dedupe_key = (edge.key, round(z_anchor, 9))
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            center = self.layout.cell_center(edge.hex_idx)
             bevel_settings: Line3D = (
                 (edge.line_2d[0][0], edge.line_2d[0][1], z_anchor),
                 (edge.line_2d[1][0], edge.line_2d[1][1], z_anchor),
             )
-            if bevel_settings not in tool_settings:
-                tool = add_bevel(None, bevel_settings, self.bevel_size, z_anchor)
-                tools.append(tool)
-                tool_settings.append(bevel_settings)
+            tool = add_bevel(
+                None,
+                bevel_settings,
+                self.bevel_size,
+                z_anchor,
+                toward_xy=center,
+            )
+            tools.append(tool)
 
         if tools:
             flower_solid = difference()(flower_solid, union()(tools))

@@ -45,14 +45,29 @@ def test_14_single_bevel_on_hex(visual) -> None:
     builder = FlowerMeshBuilder(tileset)
     hex_idx = 3
     base = builder.build_hex_solid(flower, hex_idx)
-    edge = next(e for e in layout.exterior_edges() if e.key == f"{hex_idx}-0")
+    ext = next(e for e in layout.exterior_edges() if e.key == f"{hex_idx}-0")
+    edge = next(
+        e
+        for e in layout.hex_bevel_edges()
+        if e.hex_idx == hex_idx
+        and (
+            e.line_2d == ext.line_2d
+            or e.line_2d == (ext.line_2d[1], ext.line_2d[0])
+        )
+    )
     z_top = builder.hex_top_z(flower, hex_idx)
     z_anchor = z_top
     line_3d = (
         (edge.line_2d[0][0], edge.line_2d[0][1], z_anchor),
         (edge.line_2d[1][0], edge.line_2d[1][1], z_anchor),
     )
-    solid = add_bevel(base, line_3d, HEXAGON_BEVEL_SIZE, z_anchor)
+    solid = add_bevel(
+        base,
+        line_3d,
+        HEXAGON_BEVEL_SIZE,
+        z_anchor,
+        toward_xy=layout.cell_center(hex_idx),
+    )
     assert z_top == TERRAIN_Z["high"]
     assert z_anchor == TERRAIN_Z["high"]
     scad = str(solid)
@@ -62,7 +77,7 @@ def test_14_single_bevel_on_hex(visual) -> None:
     visual(
         "14_single_bevel",
         solid,
-        "High hex 3 — chamfer on edge 3-0 clips the top exterior corner (no lip above the bevel).",
+        "High hex 3 — chamfer on one outward side clips the top corner (no lip above the bevel).",
         subdir="03_edges",
     )
 
@@ -102,6 +117,6 @@ def test_16_bevels_on_height_step(visual) -> None:
     visual(
         "16_bevels_on_height_step",
         solid,
-        "Height-step union with exterior bevels — chamfered top rim.",
+        "Height-step union with chamfer on every hex side (all seven cells).",
         subdir="03_edges",
     )

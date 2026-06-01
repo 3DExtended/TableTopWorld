@@ -48,19 +48,7 @@ def _magnet_center(line: tuple[tuple[float, float], tuple[float, float]]) -> tup
 
 
 def _bevel_segment_count(layout: FlowerLayout) -> int:
-    tool_settings: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
-    count = 0
-    for hex_idx in FlowerLayout.RING_HEX_INDICES:
-        verts = layout.ring_vertices(hex_idx)
-        length = len(verts)
-        for i in range(length):
-            p1 = verts[i]
-            p2 = verts[(i + 1) % length]
-            bevel_settings = ((p1[0], p1[1], 0.0), (p2[0], p2[1], 0.0))
-            if bevel_settings not in tool_settings:
-                tool_settings.append(bevel_settings)
-                count += 1
-    return count
+    return len(layout.hex_bevel_edges())
 
 
 def _path_cut_centers(
@@ -153,9 +141,7 @@ def plan_flower(
             )
 
     max_z = mesh.max_flower_z(flower)
-    bevel_z_anchor = max(
-        mesh.hex_mesh_top_z(flower, h) for h in FlowerLayout.RING_HEX_INDICES
-    )
+    bevel_z_anchor = max(mesh.hex_mesh_top_z(flower, h) for h in range(7))
     bevel = BevelSpec(
         z_anchor=bevel_z_anchor,
         size=HEXAGON_BEVEL_SIZE,
