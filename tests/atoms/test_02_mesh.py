@@ -15,26 +15,26 @@ DEFAULT = ROOT / "tilesets" / "default.yaml"
 
 
 def test_05_hex_prism_ground_standable(visual) -> None:
-    """Single ground standable hex (cell 1): 2 mm base plate from flower bottom to Z=0."""
+    """Single ground standable hex (cell 1): slab from print bed z=0 to BASE_PLATE_DEPTH."""
     tileset = atom_all_ground()
     flower = tileset.flowers["atom_all_ground"]
     builder = FlowerMeshBuilder(tileset)
     solid = builder.build_hex_solid(flower, 1)
     spec = plan_flower(tileset, flower).hexes[1]
-    assert spec.top_z == 0.0
+    assert spec.top_z == BASE_PLATE_DEPTH
     assert spec.prism_height == BASE_PLATE_DEPTH
     scad = str(solid)
     assert f"linear_extrude(height = {BASE_PLATE_DEPTH})" in scad
     visual(
         "05_hex_prism_ground",
         solid,
-        "One ground hex — short slab from Z=-2 to Z=0 only.",
+        "One ground hex — slab from z=0 to z=2 (magnet-height wall, no collar).",
         subdir="02_mesh",
     )
 
 
 def test_06_hex_prism_middle_standable(visual) -> None:
-    """Center hex at middle terrain: extrusion height 6 (from -2 to +4)."""
+    """Center hex at middle terrain: extrusion from z=0 to z=4."""
     tileset = atom_height_step()
     flower = tileset.flowers["atom_height_step"]
     builder = FlowerMeshBuilder(tileset)
@@ -42,7 +42,7 @@ def test_06_hex_prism_middle_standable(visual) -> None:
     spec = plan_flower(tileset, flower).hexes[0]
     assert spec.terrain == "middle"
     assert spec.top_z == TERRAIN_Z["middle"]
-    assert spec.prism_height == TERRAIN_Z["middle"] - FLOWER_BOTTOM_Z
+    assert spec.prism_height == TERRAIN_Z["middle"]
     visual(
         "06_hex_prism_middle",
         solid,
@@ -74,11 +74,11 @@ def test_08_slope_ramp_ground_to_middle(visual) -> None:
     builder = FlowerMeshBuilder(tileset)
     solid = builder.build_hex_solid(flower, 5)
     spec = plan_flower(tileset, flower).hexes[5]
-    assert spec.slope_ramp_height == TERRAIN_Z["middle"]
-    assert spec.slope_ramp_base_z == 0.0
+    assert spec.slope_ramp_height == TERRAIN_Z["middle"] - BASE_PLATE_DEPTH
+    assert spec.slope_ramp_base_z == BASE_PLATE_DEPTH
     heights = [float(x) for x in re.findall(r"linear_extrude\(height = ([\d.]+)\)", str(solid))]
     assert BASE_PLATE_DEPTH in heights
-    assert TERRAIN_Z["middle"] in heights
+    assert TERRAIN_Z["middle"] - BASE_PLATE_DEPTH in heights
     visual(
         "08_slope_ramp",
         solid,

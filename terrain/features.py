@@ -10,13 +10,11 @@ from solid2 import union
 from solid2.extensions.bosl2 import beziers, path_sweep, regular_ngon
 
 from terrain.constants import (
-    HEXAGON_BEVEL_SIZE,
     STREET_INDENT_HEIGHT,
     STREET_WIDTH_SCALAR,
     WATER_INDENT_HEIGHT,
     WATER_WIDTH_SCALAR,
 )
-from terrain.edges import add_bevel
 from terrain.layout import FlowerLayout
 
 if TYPE_CHECKING:
@@ -115,26 +113,10 @@ class FeatureCutters:
             ),
         )
 
-        bevels_tool = None
-        z_anchor = max(host_z, 1.2)
-        for hex_idx in FlowerLayout.RING_HEX_INDICES:
-            verts = self.layout.ring_vertices(hex_idx)
-            for i in range(len(verts)):
-                p1, p2 = verts[i], verts[(i + 1) % len(verts)]
-                line = ((p1[0], p1[1], z_anchor), (p2[0], p2[1], z_anchor))
-                if bevels_tool is None:
-                    bevels_tool = add_bevel(None, line, HEXAGON_BEVEL_SIZE, z_anchor)
-                else:
-                    bevels_tool += add_bevel(None, line, HEXAGON_BEVEL_SIZE, z_anchor)
-
-        bevels_tool = bevels_tool & tool if bevels_tool is not None else None
         tool = tool.translateZ(
             path_width / 2 + host_z - indent_height + counter * 0.00001
         )
-        subtractions: list[OpenSCADObject] = [tool]
-        if bevels_tool is not None:
-            subtractions.append(bevels_tool.translateZ(-indent_height))
-        return subtractions
+        return [tool]
 
     def apply_features(
         self,

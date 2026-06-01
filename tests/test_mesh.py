@@ -43,7 +43,7 @@ def test_terrain_z_absolute_levels() -> None:
 @pytest.mark.parametrize(
     ("hex_idx", "terrain", "expected_top"),
     [
-        (1, "ground", 0.0),
+        (1, "ground", BASE_PLATE_DEPTH),
         (0, "middle", 4.0),
         (3, "high", 8.0),
     ],
@@ -56,42 +56,49 @@ def test_hill_north_hex_top_z(hex_idx: int, terrain: str, expected_top: float) -
     assert builder.hex_top_z(flower, hex_idx) == expected_top
 
 
-def test_ground_standable_uses_base_plate_below_zero() -> None:
+def test_ground_standable_extrudes_from_print_bed() -> None:
     tileset = load_tileset(DEFAULT)
     flower = tileset.flowers["hill_north"]
     builder = FlowerMeshBuilder(tileset)
     scad = str(builder.build_hex_solid(flower, 1))
     assert f"linear_extrude(height = {BASE_PLATE_DEPTH})" in scad
-    assert f"translate(v = [0, 0, {FLOWER_BOTTOM_Z}])" in scad
+    assert "translate(v = [0, 0, -" not in scad
     assert "linear_extrude(height = 8.0)" not in scad
 
 
-def test_middle_standable_extrudes_from_flower_bottom() -> None:
+def test_middle_standable_extrudes_from_print_bed() -> None:
     tileset = load_tileset(DEFAULT)
     flower = tileset.flowers["hill_north"]
     builder = FlowerMeshBuilder(tileset)
     scad = str(builder.build_hex_solid(flower, 0))
-    assert "linear_extrude(height = 6.0)" in scad
-    assert f"translate(v = [0, 0, {FLOWER_BOTTOM_Z}])" in scad
+    assert "linear_extrude(height = 4.0)" in scad
+    assert "translate(v = [0, 0, -" not in scad
 
 
-def test_high_standable_extrudes_from_flower_bottom() -> None:
+def test_high_standable_extrudes_from_print_bed() -> None:
     tileset = load_tileset(DEFAULT)
     flower = tileset.flowers["hill_north"]
     builder = FlowerMeshBuilder(tileset)
     scad = str(builder.build_hex_solid(flower, 3))
-    assert "linear_extrude(height = 10.0)" in scad
-    assert f"translate(v = [0, 0, {FLOWER_BOTTOM_Z}])" in scad
+    assert "linear_extrude(height = 8.0)" in scad
+    assert "translate(v = [0, 0, -" not in scad
 
 
-def test_flower_hexes_share_common_bottom_z() -> None:
+def test_flower_hexes_share_print_bed_at_z_zero() -> None:
     tileset = load_tileset(DEFAULT)
     flower = tileset.flowers["hill_north"]
     builder = FlowerMeshBuilder(tileset)
-    bottom = f"translate(v = [0, 0, {FLOWER_BOTTOM_Z}])"
     for hex_idx in range(7):
         scad = str(builder.build_hex_solid(flower, hex_idx))
-        assert bottom in scad
+        assert "translate(v = [0, 0, -" not in scad
+
+
+def test_slope_hex_mesh_top_matches_ramp_peak() -> None:
+    tileset = load_tileset(DEFAULT)
+    flower = tileset.flowers["hill_north"]
+    builder = FlowerMeshBuilder(tileset)
+    assert builder.hex_top_z(flower, 5) == BASE_PLATE_DEPTH
+    assert builder.hex_mesh_top_z(flower, 5) == TERRAIN_Z["middle"]
 
 
 def test_slope_ramp_span_equals_level_delta() -> None:
@@ -102,20 +109,22 @@ def test_slope_ramp_span_equals_level_delta() -> None:
     scad = str(builder.build_hex_solid(flower, 5))
     heights = [float(x) for x in re.findall(r"linear_extrude\(height = ([\d.]+)\)", scad)]
     assert BASE_PLATE_DEPTH in heights
-    assert 4.0 in heights
+    assert 2.0 in heights  # ramp from z=2 to z=4
 
 
-def test_flat_plains_ground_tops_at_zero() -> None:
+def test_flat_plains_ground_mesh_tops_at_base_plate_depth() -> None:
     tileset = load_tileset(DEFAULT)
     flower = tileset.flowers["flat_plains"]
     builder = FlowerMeshBuilder(tileset)
     for i in range(7):
-        assert builder.hex_top_z(flower, i) == 0.0
+        assert builder.hex_top_z(flower, i) == BASE_PLATE_DEPTH
 
 
-def test_flat_plains_export_magnet_at_ground_top() -> None:
+def test_flat_plains_export_magnet_at_fixed_z() -> None:
     tileset = load_tileset(DEFAULT)
+    builder = FlowerMeshBuilder(tileset)
+    mesh_scad = str(builder.build_hex_solid(tileset.flowers["flat_plains"], 1))
+    assert "intersection()" not in mesh_scad
     exporter = AssemblyExporter(tileset, resolution=32)
     scad = str(exporter.build_flower("flat_plains"))
-    assert "translate(v = [0, 0, 2.0])" not in scad
-    assert "translate(v = [0, 0, 0.0])" in scad
+    assert "translate(v = [0, 0, 0.78])" in scad

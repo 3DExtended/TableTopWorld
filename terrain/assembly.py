@@ -47,8 +47,8 @@ class AssemblyExporter:
             raise KeyError(f"unknown flower {flower_id!r}")
         flower = self.tileset.flowers[flower_id]
         solid = self.mesh_builder.build_flower(flower)
-        max_z = self.mesh_builder.max_flower_z(flower)
-        solid = self.edge_geom.apply_bevels(solid, max_z)
+        hex_top_z = lambda idx: self.mesh_builder.hex_mesh_top_z(flower, idx)
+        solid = self.edge_geom.apply_bevels(solid, hex_top_z)
         solid = self.features.apply_features(solid, flower, self.tileset)
         solid = self.edge_geom.apply_magnets(solid, flower, self.catalog)
         return solid

@@ -2,20 +2,17 @@
 
 # Plate / extrusion
 DEFAULT_HEX_OUTER_WIDTH = 5.1961525
-# Sub-terrain base thickness below terrain Z=0; shared print-bed plane for every hex.
+# Minimum ground-level hex height from the print bed (z=0) so exterior walls reach magnet height.
 BASE_PLATE_DEPTH = 2.0
-FLOWER_BOTTOM_Z = -BASE_PLATE_DEPTH
+FLOWER_BOTTOM_Z = 0.0
 LEGACY_HEXAGON_HEIGHT = BASE_PLATE_DEPTH  # alias for callers expecting legacy name
 
 # Magnets (horizontal cylinder through outward vertical wall)
 MAGNET_DEPTH = 0.15
 MAGNET_RADIUS = 0.53
-# Offset above terrain Z=0 (top of ground hex wall), matching legacy hexagon.py.
+# Fixed center Z for every exterior mating magnet (above print bed z=0).
 MAGNET_HEIGHT_OVER_GROUND = 0.25
-# Uniform center Z for every exterior mating magnet (same on all 18 outward faces).
 MAGNET_CENTER_Z = MAGNET_HEIGHT_OVER_GROUND + MAGNET_RADIUS
-# Exterior wall must reach this Z so the horizontal magnet bore intersects the mesh.
-MAGNET_WALL_TOP_Z = MAGNET_CENTER_Z + MAGNET_RADIUS
 
 # Bevels (model units; × meta.scale for mm — 0.7 × 5 ≈ 3.5 mm chamfer depth)
 HEXAGON_BEVEL_SIZE = 0.7

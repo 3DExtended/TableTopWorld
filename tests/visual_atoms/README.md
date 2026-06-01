@@ -49,7 +49,7 @@ All tests (unit + visual): `.venv/bin/python -m pytest tests/ -q`
 
 | Test | SCAD | Expect in OpenSCAD |
 |------|------|-------------------|
-| 05 | `05_hex_prism_ground.scad` | One short hex slab, top at Z=0 (2 mm from bed at Z=-2). |
+| 05 | `05_hex_prism_ground.scad` | One ground hex slab from z=0 to z=2 (no magnet collar). |
 | 06 | `06_hex_prism_middle.scad` | One taller center hex, top at Z=4. |
 | 07 | `07_hex_prism_high.scad` | One tall hex, top at Z=8. |
 | 08 | `08_slope_ramp.scad` | Ground hex plus wedge ramp up to neighbor height. |
@@ -62,7 +62,7 @@ All tests (unit + visual): `.venv/bin/python -m pytest tests/ -q`
 
 | Test | SCAD | Expect in OpenSCAD |
 |------|------|-------------------|
-| 13 | `13_single_magnet.scad` | One ground hex (rim built into the hex); horizontal magnet bore on exterior edge 1-0. |
+| 13 | `13_single_magnet.scad` | Ground hex slab z=0–2; fixed-height magnet bore on edge 1-0. |
 | 14 | `14_single_bevel.scad` | High hex 3; chamfer on edge 3-0 — side wedge, sloped top wedge, and flat top box (three cutters). |
 | 15 | `15_all_magnets_ground_plateau.scad` | Flat 7-hex plate, 18 magnet holes on outer rim. |
 | 16 | `16_bevels_on_height_step.scad` | Height-step union with chamfered top edges. |

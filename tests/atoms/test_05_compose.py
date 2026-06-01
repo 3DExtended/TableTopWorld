@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from terrain.assembly import AssemblyExporter
+from terrain.constants import TERRAIN_Z
 from terrain.render.format import format_render_spec
 from terrain.render.planner import plan_flower
 from tests.helpers.atom_builders import atom_height_step, atom_road_only, atom_slope_pad
@@ -19,8 +20,8 @@ def test_22_height_step_mesh_plus_bevels(visual) -> None:
     exporter = AssemblyExporter(tileset, resolution=32)
     flower = tileset.flowers["atom_height_step"]
     solid = exporter.mesh_builder.build_flower(flower)
-    max_z = exporter.mesh_builder.max_flower_z(flower)
-    solid = exporter.edge_geom.apply_bevels(solid, max_z)
+    hex_top_z = lambda idx: exporter.mesh_builder.hex_mesh_top_z(flower, idx)
+    solid = exporter.edge_geom.apply_bevels(solid, hex_top_z)
     visual(
         "22_height_step_bevels",
         solid,
@@ -47,10 +48,14 @@ def test_23_height_step_full_edges(visual) -> None:
 def test_24_slope_atom_full_export(visual) -> None:
     """Slope-focused atom exported through full assembly pipeline."""
     tileset = atom_slope_pad()
+    flower = tileset.flowers["atom_slope_pad"]
     exporter = AssemblyExporter(tileset, resolution=32)
+    builder = exporter.mesh_builder
+    assert builder.hex_mesh_top_z(flower, 5) == TERRAIN_Z["middle"]
     solid = exporter.build_flower("atom_slope_pad")
-    spec = plan_flower(tileset, tileset.flowers["atom_slope_pad"])
+    spec = plan_flower(tileset, flower)
     assert spec.hexes[5].slope_ramp_height is not None
+    assert spec.bevel.z_anchor == TERRAIN_Z["middle"]
     visual(
         "24_slope_atom_full",
         solid,
@@ -78,7 +83,9 @@ def test_26_flat_plains_production(visual, default_tileset) -> None:
     exporter = AssemblyExporter(default_tileset, resolution=32)
     solid = exporter.build_flower("flat_plains")
     spec = exporter.describe_flower("flat_plains")
-    assert spec.max_z == 0.0
+    from terrain.constants import BASE_PLATE_DEPTH
+
+    assert spec.max_z == BASE_PLATE_DEPTH
     assert any(p.kind == "road" for p in spec.path_cuts)
     visual(
         "26_flat_plains",

@@ -93,15 +93,10 @@ def plan_flower(
         slope_ramp_height: float | None = None
         slope_ramp_base_z: float | None = None
 
-        if hdef.role == "slope":
-            neighbor_z = [
-                mesh.hex_top_z(flower, n) for n in mesh.neighbor_indices(hex_idx)
-            ]
-            if neighbor_z:
-                target = max(neighbor_z)
-                if target > z_top:
-                    slope_ramp_height = target - z_top
-                    slope_ramp_base_z = z_top
+        ramp_top = mesh.slope_ramp_top_z(flower, hex_idx, z_top=z_top)
+        if ramp_top is not None:
+            slope_ramp_height = ramp_top - z_top
+            slope_ramp_base_z = z_top
 
         hex_specs.append(
             HexCellSpec(
@@ -158,8 +153,11 @@ def plan_flower(
             )
 
     max_z = mesh.max_flower_z(flower)
+    bevel_z_anchor = max(
+        mesh.hex_mesh_top_z(flower, h) for h in FlowerLayout.RING_HEX_INDICES
+    )
     bevel = BevelSpec(
-        z_anchor=max(max_z, 1.2),
+        z_anchor=bevel_z_anchor,
         size=HEXAGON_BEVEL_SIZE,
         segment_count=_bevel_segment_count(layout),
     )

@@ -4,16 +4,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from solid2 import cylinder, intersection, polygon, union
+from solid2 import cylinder, polygon, union
 
 from terrain.constants import (
+    BASE_PLATE_DEPTH,
     FLOWER_BOTTOM_Z,
     MAGNET_DEPTH,
     MAGNET_RADIUS,
-    MAGNET_WALL_TOP_Z,
     TOPPING_HEX_INDICES,
 )
-from terrain.edges import magnet_wall_slab
 from terrain.layout import FlowerLayout
 
 if TYPE_CHECKING:
@@ -33,11 +32,38 @@ class FlowerMeshBuilder:
         return self.tileset.terrain_z(level)
 
     def hex_top_z(self, flower: FlowerDef, hex_idx: int) -> float:
-        """Standable / slope reference top in model units (terrain_z for the hex)."""
-        return self.terrain_z(flower.hexes[str(hex_idx)].terrain)
+        """Standable plateau Z before slope ramps (ground uses BASE_PLATE_DEPTH)."""
+        z = self.terrain_z(flower.hexes[str(hex_idx)].terrain)
+        if z <= 1e-9:
+            return BASE_PLATE_DEPTH
+        return z
+
+    def slope_ramp_top_z(
+        self, flower: FlowerDef, hex_idx: int, *, z_top: float | None = None
+    ) -> float | None:
+        """Upper Z of a slope wedge when the hex rises toward a taller neighbor."""
+        hdef = flower.hexes[str(hex_idx)]
+        if hdef.role != "slope":
+            return None
+        plateau = z_top if z_top is not None else self.hex_top_z(flower, hex_idx)
+        neighbor_z = [
+            self.hex_top_z(flower, n) for n in self.neighbor_indices(hex_idx)
+        ]
+        if not neighbor_z:
+            return None
+        target = max(neighbor_z)
+        if target > plateau:
+            return target
+        return None
+
+    def hex_mesh_top_z(self, flower: FlowerDef, hex_idx: int) -> float:
+        """Highest solid Z on the hex, including slope ramps (used for bevel anchors)."""
+        plateau = self.hex_top_z(flower, hex_idx)
+        ramp_top = self.slope_ramp_top_z(flower, hex_idx, z_top=plateau)
+        return ramp_top if ramp_top is not None else plateau
 
     def hex_height_at(self, flower: FlowerDef, hex_idx: int) -> float:
-        return self.hex_top_z(flower, hex_idx)
+        return self.hex_mesh_top_z(flower, hex_idx)
 
     def build_hex_prism(self, hex_idx: int, height: float) -> OpenSCADObject:
         points = self.layout.cell_polygon(hex_idx)
@@ -50,50 +76,20 @@ class FlowerMeshBuilder:
         return [0, ((ring + 5) % 6) + 1, ((ring + 1) % 6) + 1]
 
     def _hex_prism_to_top(self, hex_idx: int, z_top: float) -> OpenSCADObject:
-        """Extrude from FLOWER_BOTTOM_Z so every hex shares one print-bed plane."""
+        """Extrude from FLOWER_BOTTOM_Z (print bed at z=0)."""
         height = z_top - FLOWER_BOTTOM_Z
         return self.build_hex_prism(hex_idx, height).translateZ(FLOWER_BOTTOM_Z)
-
-    def _exterior_magnet_collar(self, hex_idx: int, z_top: float) -> OpenSCADObject | None:
-        """Extra exterior rim inside the hex footprint up to magnet height (ground tiles)."""
-        if hex_idx not in FlowerLayout.RING_HEX_INDICES:
-            return None
-        if z_top >= MAGNET_WALL_TOP_Z - 1e-9:
-            return None
-        verts = self.layout.ring_vertices(hex_idx)
-        center = self.layout.cell_center(hex_idx)
-        extended = self._hex_prism_to_top(hex_idx, MAGNET_WALL_TOP_Z)
-        bands: list[OpenSCADObject] = []
-        for vi in self.layout.exterior_vertex_indices(hex_idx):
-            line = (verts[vi], verts[(vi + 1) % 6])
-            bands.append(
-                magnet_wall_slab(
-                    line,
-                    FLOWER_BOTTOM_Z,
-                    MAGNET_WALL_TOP_Z,
-                    center,
-                )
-            )
-        return intersection()(extended, union()(*bands))
 
     def build_hex_solid(self, flower: FlowerDef, hex_idx: int) -> OpenSCADObject:
         hdef = flower.hexes[str(hex_idx)]
         z_top = self.hex_top_z(flower, hex_idx)
         solid = self._hex_prism_to_top(hex_idx, z_top)
 
-        if hdef.role == "slope":
-            neighbor_z = [
-                self.hex_top_z(flower, n) for n in self.neighbor_indices(hex_idx)
-            ]
-            if neighbor_z:
-                target = max(neighbor_z)
-                if target > z_top:
-                    ramp_h = target - z_top
-                    ramp = self.build_hex_prism(hex_idx, ramp_h).translateZ(z_top)
-                    solid = solid + ramp
-        collar = self._exterior_magnet_collar(hex_idx, z_top)
-        if collar is not None:
-            solid = solid + collar
+        ramp_top = self.slope_ramp_top_z(flower, hex_idx, z_top=z_top)
+        if ramp_top is not None:
+            ramp_h = ramp_top - z_top
+            ramp = self.build_hex_prism(hex_idx, ramp_h).translateZ(z_top)
+            solid = solid + ramp
         return solid
 
     def subtract_topping_holes(

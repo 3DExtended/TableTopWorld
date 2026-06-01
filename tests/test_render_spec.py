@@ -35,10 +35,10 @@ def tileset():
 def test_flat_plains_all_ground_hexes(tileset) -> None:
     spec = plan_flower(tileset, tileset.flowers["flat_plains"])
     assert spec.flower_bottom_z == FLOWER_BOTTOM_Z
-    assert spec.max_z == 0.0
+    assert spec.max_z == BASE_PLATE_DEPTH
     for cell in spec.hexes:
         assert cell.terrain == "ground"
-        assert cell.top_z == 0.0
+        assert cell.top_z == BASE_PLATE_DEPTH
         assert cell.prism_height == BASE_PLATE_DEPTH
         assert cell.slope_ramp_height is None
 
@@ -46,13 +46,13 @@ def test_flat_plains_all_ground_hexes(tileset) -> None:
 def test_hill_north_mixed_heights_and_slope_ramp(tileset) -> None:
     spec = plan_flower(tileset, tileset.flowers["hill_north"])
     by_idx = {h.hex_idx: h for h in spec.hexes}
-    assert by_idx[1].terrain == "ground" and by_idx[1].top_z == 0.0
+    assert by_idx[1].terrain == "ground" and by_idx[1].top_z == BASE_PLATE_DEPTH
     assert by_idx[0].terrain == "middle" and by_idx[0].top_z == TERRAIN_Z["middle"]
     assert by_idx[3].terrain == "high" and by_idx[3].top_z == TERRAIN_Z["high"]
     slope = by_idx[5]
     assert slope.role == "slope"
-    assert slope.slope_ramp_height == TERRAIN_Z["middle"]
-    assert slope.slope_ramp_base_z == 0.0
+    assert slope.slope_ramp_height == TERRAIN_Z["middle"] - BASE_PLATE_DEPTH
+    assert slope.slope_ramp_base_z == BASE_PLATE_DEPTH
 
 
 def test_all_hexes_share_flower_bottom_z(tileset) -> None:

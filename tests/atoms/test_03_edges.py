@@ -16,7 +16,7 @@ def _ground_slab(tileset, flower, hex_idx: int = 1):
 
 
 def test_13_single_magnet_on_ground_hex(visual) -> None:
-    """One magnet bore through ground hex 1 exterior rim (collar is part of the hex mesh)."""
+    """One magnet bore through ground hex 1 side wall (fixed MAGNET_CENTER_Z)."""
     tileset = atom_all_ground()
     flower = tileset.flowers["atom_all_ground"]
     layout = tileset.layout()
@@ -27,18 +27,18 @@ def test_13_single_magnet_on_ground_hex(visual) -> None:
     spec_magnet = plan_flower(tileset, flower).magnet_holes[0]
     assert spec_magnet.edge_key == "1-0"
     assert spec_magnet.center_z == MAGNET_CENTER_Z
-    assert "intersection()" in str(base)
+    assert "intersection()" not in str(base)
     assert "difference()" in str(solid)
     visual(
         "13_single_magnet",
         solid,
-        "Single ground hex with exterior rim to magnet height; bore on edge 1-0 through the hex side.",
+        "Ground hex slab from z=0; horizontal magnet bore on edge 1-0 at fixed height.",
         subdir="03_edges",
     )
 
 
 def test_14_single_bevel_on_hex(visual) -> None:
-    """One chamfer on a tall ring hex (no magnet brim) at max(z_top, 1.2)."""
+    """One chamfer on a tall ring hex (no magnet brim) at hex top Z."""
     tileset = atom_height_step()
     flower = tileset.flowers["atom_height_step"]
     layout = tileset.layout()
@@ -47,7 +47,7 @@ def test_14_single_bevel_on_hex(visual) -> None:
     base = builder.build_hex_solid(flower, hex_idx)
     edge = next(e for e in layout.exterior_edges() if e.key == f"{hex_idx}-0")
     z_top = builder.hex_top_z(flower, hex_idx)
-    z_anchor = max(z_top, 1.2)
+    z_anchor = z_top
     line_3d = (
         (edge.line_2d[0][0], edge.line_2d[0][1], z_anchor),
         (edge.line_2d[1][0], edge.line_2d[1][1], z_anchor),
@@ -95,9 +95,10 @@ def test_16_bevels_on_height_step(visual) -> None:
     builder = FlowerMeshBuilder(tileset)
     solid = builder.build_flower(flower)
     max_z = builder.max_flower_z(flower)
-    solid = EdgeGeometry(tileset.layout()).apply_bevels(solid, max_z)
+    hex_top_z = lambda idx: builder.hex_mesh_top_z(flower, idx)
+    solid = EdgeGeometry(tileset.layout()).apply_bevels(solid, hex_top_z)
     spec = plan_flower(tileset, flower)
-    assert spec.bevel.z_anchor == max(max_z, 1.2)
+    assert spec.bevel.z_anchor == max_z
     visual(
         "16_bevels_on_height_step",
         solid,

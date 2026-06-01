@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers.atom_builders import atom_all_ground
-from terrain.constants import BEVEL_TOP_SLAB_DEPTH, BEVEL_Z_INSET, HEXAGON_BEVEL_SIZE
+from terrain.constants import (
+    BASE_PLATE_DEPTH,
+    BEVEL_TOP_SLAB_DEPTH,
+    BEVEL_Z_INSET,
+    HEXAGON_BEVEL_SIZE,
+)
 from terrain.edges import add_bevel
 from terrain.layout import FlowerLayout
 from terrain.mesh import FlowerMeshBuilder
@@ -19,7 +24,7 @@ def test_bevel_cutter_side_below_top_at_z_anchor() -> None:
     builder = FlowerMeshBuilder(tileset)
     builder.build_hex_solid(flower, 1)
     edge = next(e for e in layout.exterior_edges() if e.key == "1-0")
-    z_anchor = 1.2
+    z_anchor = BASE_PLATE_DEPTH
     line_3d = (
         (edge.line_2d[0][0], edge.line_2d[0][1], z_anchor),
         (edge.line_2d[1][0], edge.line_2d[1][1], z_anchor),
@@ -46,8 +51,8 @@ def test_bevel_top_wedge_inward_offset() -> None:
     edge = next(e for e in layout.exterior_edges() if e.key == "1-0")
     line_xy = _bevel_line_xy(
         (
-            (edge.line_2d[0][0], edge.line_2d[0][1], 1.2),
-            (edge.line_2d[1][0], edge.line_2d[1][1], 1.2),
+            (edge.line_2d[0][0], edge.line_2d[0][1], BASE_PLATE_DEPTH),
+            (edge.line_2d[1][0], edge.line_2d[1][1], BASE_PLATE_DEPTH),
         )
     )
     scad = str(_bevel_top_shelf_wedge(line_xy, HEXAGON_BEVEL_SIZE))
@@ -59,6 +64,22 @@ def test_bevel_top_wedge_inward_offset() -> None:
     assert offset == pytest.approx(HEXAGON_BEVEL_SIZE * 0.75, rel=1e-4)
 
 
+def test_path_feature_tools_exclude_bevel_cutters() -> None:
+    """Road/water sweeps must not embed chamfer polyhedrons (bevels are edge-only)."""
+    from solid2 import union
+
+    from tests.atoms.test_04_features import _road_subtraction_tools, _water_subtraction_tools
+    from tests.helpers.atom_builders import atom_road_only, atom_water_only
+
+    for tileset, tools_fn in (
+        (atom_road_only(), _road_subtraction_tools),
+        (atom_water_only(), _water_subtraction_tools),
+    ):
+        flower = next(iter(tileset.flowers.values()))
+        scad = str(union()(*tools_fn(tileset, flower)))
+        assert "polyhedron" not in scad
+
+
 def test_bevel_subtracts_from_ground_hex() -> None:
     tileset = atom_all_ground()
     flower = tileset.flowers["atom_all_ground"]
@@ -66,12 +87,13 @@ def test_bevel_subtracts_from_ground_hex() -> None:
     builder = FlowerMeshBuilder(tileset)
     base = builder.build_hex_solid(flower, 1)
     edge = next(e for e in layout.exterior_edges() if e.key == "1-0")
-    z_anchor = 1.2
+    z_anchor = builder.hex_top_z(flower, 1)
     line_3d = (
         (edge.line_2d[0][0], edge.line_2d[0][1], z_anchor),
         (edge.line_2d[1][0], edge.line_2d[1][1], z_anchor),
     )
     solid = add_bevel(base, line_3d, HEXAGON_BEVEL_SIZE, z_anchor)
+    assert z_anchor == BASE_PLATE_DEPTH
     scad = str(solid)
     assert "difference()" in scad
     assert "polyhedron" in scad

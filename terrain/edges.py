@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Callable, Tuple
 
 import numpy as np
-from solid2 import cylinder, difference, linear_extrude, polygon, polyhedron, union
+from solid2 import cylinder, difference, polyhedron, union
 
 from terrain.catalog import EdgeProfileCatalog
 from terrain.constants import (
@@ -169,42 +169,6 @@ def angle_with_x_axis(line_for_hole: Line2D) -> tuple[float, float]:
     return angle_rad, math.degrees(angle_rad)
 
 
-def magnet_wall_slab(
-    line: Line2D,
-    z_bottom: float,
-    z_top: float,
-    cell_center: tuple[float, float],
-    *,
-    thickness: float = 1.2,
-    inset: float = 0.45,
-) -> OpenSCADObject:
-    """Volume along an exterior edge, shifted inward so it merges with the hex body."""
-    p1, p2 = line
-    dx, dy = p2[0] - p1[0], p2[1] - p1[1]
-    length = math.hypot(dx, dy) or 1.0
-    angle = math.degrees(math.atan2(dy, dx))
-    mid = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
-    cx, cy = cell_center
-    to_center = (cx - mid[0], cy - mid[1])
-    dist = math.hypot(to_center[0], to_center[1]) or 1.0
-    place = (
-        mid[0] + inset * to_center[0] / dist,
-        mid[1] + inset * to_center[1] / dist,
-    )
-    height = z_top - z_bottom
-    bar = linear_extrude(height=height)(
-        polygon(
-            points=[
-                (-length / 2, -thickness / 2),
-                (length / 2, -thickness / 2),
-                (length / 2, thickness / 2),
-                (-length / 2, thickness / 2),
-            ]
-        )
-    )
-    return bar.rotateZ(angle).translateX(place[0]).translateY(place[1]).translateZ(z_bottom)
-
-
 def add_magnet_hole_on_side(
     obj: OpenSCADObject,
     line_for_hole: Line2D,
@@ -212,7 +176,7 @@ def add_magnet_hole_on_side(
     magnet_radius: float = MAGNET_RADIUS,
     magnet_depth: float = MAGNET_DEPTH,
 ) -> OpenSCADObject:
-    """Port of addMagnetHoleOnSide; center Z is offset from FLOWER_BOTTOM_Z."""
+    """Subtract horizontal magnet bore at a fixed Z (see MAGNET_CENTER_Z)."""
     cylinder_tool = cylinder(h=magnet_depth * 4, center=True, r=magnet_radius)
     center_of_line = (
         line_for_hole[1][0] - 0.5 * (line_for_hole[1][0] - line_for_hole[0][0]),
@@ -254,13 +218,13 @@ class EdgeGeometry:
     def apply_bevels(
         self,
         flower_solid: OpenSCADObject,
-        max_z: float,
+        hex_top_z: Callable[[int], float],
     ) -> OpenSCADObject:
         tools: list[OpenSCADObject] = []
         tool_settings: list[Line3D] = []
-        z_anchor = max(max_z, 1.2)
 
         for edge in self.layout.exterior_edges():
+            z_anchor = hex_top_z(edge.hex_idx)
             bevel_settings: Line3D = (
                 (edge.line_2d[0][0], edge.line_2d[0][1], z_anchor),
                 (edge.line_2d[1][0], edge.line_2d[1][1], z_anchor),
@@ -279,7 +243,7 @@ class EdgeGeometry:
         flower_solid: OpenSCADObject,
         flower: FlowerDef,
         catalog: EdgeProfileCatalog,
-        max_z: float,
+        hex_top_z: Callable[[int], float],
     ) -> OpenSCADObject:
-        flower_solid = self.apply_bevels(flower_solid, max_z)
+        flower_solid = self.apply_bevels(flower_solid, hex_top_z)
         return self.apply_magnets(flower_solid, flower, catalog)
