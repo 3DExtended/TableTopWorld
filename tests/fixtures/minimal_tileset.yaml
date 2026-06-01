@@ -1,0 +1,39 @@
+meta:
+  height_step_mm: 20
+  scale: 5
+  hex_outer_width: 5.1961525
+
+preview_map:
+  - { id: alpha, at: [0, 0], rot: 0 }
+
+flowers:
+  alpha:
+    hexes:
+      "0": { terrain: ground, role: standable }
+      "1": { terrain: ground, role: standable }
+      "2": { terrain: ground, role: standable }
+      "3": { terrain: ground, role: standable }
+      "4": { terrain: ground, role: standable }
+      "5": { terrain: ground, role: standable }
+      "6": { terrain: ground, role: standable }
+    edges:
+      "1-0": { profile: flat_ground }
+      "1-1": { profile: flat_ground }
+      "1-2": { profile: flat_ground }
+      "2-0": { profile: flat_ground }
+      "2-1": { profile: flat_ground }
+      "2-2": { profile: flat_ground }
+      "3-0": { profile: flat_ground }
+      "3-1": { profile: flat_ground }
+      "3-2": { profile: flat_ground }
+      "4-0": { profile: flat_ground }
+      "4-1": { profile: flat_ground }
+      "4-2": { profile: flat_ground }
+      "5-0": { profile: flat_ground }
+      "5-1": { profile: flat_ground }
+      "5-2": { profile: flat_ground }
+      "6-0": { profile: flat_ground }
+      "6-1": { profile: flat_ground }
+      "6-2": { profile: flat_ground }
+    roads: []
+    water: []
