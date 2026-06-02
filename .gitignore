@@ -10,6 +10,11 @@ venv/
 *.scad
 *.stl
 
+# Hand-authored hexflower prototypes (not generated tile output)
+!output/hexflower_prototypes/
+!output/hexflower_prototypes/*.scad
+
 # OS
 .DS_Store
 output/*
+!output/hexflower_prototypes/
