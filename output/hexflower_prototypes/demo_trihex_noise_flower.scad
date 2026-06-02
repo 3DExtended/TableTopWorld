@@ -14,9 +14,8 @@ scale(SCALE) {
 
   hf_trihex_noise_flower(
     hex_r = HEX_R,
-    // Coarse mesh (≈4× base step); flower enforces a minimum of hex_r/10 for clean junctions.
+    // Coarse mesh (≈4× base step); flower enforces a minimum of hex_r/12 for clean junctions.
     tri_step = 0.26 * 4,
-    base_z = 1.2,
     thickness = 3.5,
     noise = [14, 2.2, 5, 0.55, 2.05, 1337],
     z_quant = 0,
@@ -24,7 +23,9 @@ scale(SCALE) {
     // Detail only on the slope band; low amp avoids faceted "zipper" on the step face.
     detail = [6, 0.04, 3, 0.55, 2.05, 4242],
     band_fade = 0.28,
-    clip_height = 50
+    clip_height = 50,
+    // Top-rim chamfer on all 7×6 hex sides; z follows local macro height so slopes show the bite.
+    bevel_size = HF_BEVEL_SIZE
   );
 }
 

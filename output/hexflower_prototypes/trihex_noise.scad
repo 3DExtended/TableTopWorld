@@ -13,7 +13,6 @@
 //     hex_r = 5.1961525,
 //     world_xy = [0,0],        // hex center in world coords
 //     tri_step = 0.35,         // smaller => finer triangles
-//     base_z = 2,
 //     thickness = 2,
 //     noise = [18, 1.0, 4, 0.55, 2.0, 1337], // [freq, amp, octaves, persistence, lacunarity, seed]
 //     z_quant = 0.25           // optional low-poly banding
@@ -24,13 +23,18 @@
 //   hf_trihex_noise_flower(
 //     hex_r = 5.1961525,
 //     tri_step = 0.28,
-//     base_z = 2,
 //     thickness = 3,
 //     noise = [14, 2.2, 5, 0.55, 2.05, 1337],
 //     z_quant = 0.22
 //   );
 
 $fn = 18;
+
+// All terrain sits on the print bed; bottom Z is not configurable.
+HF_FLOWER_BOTTOM_Z = 0;
+
+include <hf_bevel.scad>
+include <hf_magnets.scad>
 
 // --- math helpers ---
 function hf_clamp(x, a, b) = x < a ? a : (x > b ? b : x);
@@ -134,9 +138,76 @@ function hf_in_flower(px, py, hex_r) =
         hi
   ]) > 0;
 
+function hf_macro_mode(macro) = hf_get(macro, 0, "standable");
+
+function hf_macro_is_ruled(macro) =
+  let(m = hf_macro_mode(macro))
+  m == "standable" || m == "step" || m == "scurve";
+
+// Signed phase across a height transition (0 = center of slope band).
+// step:  straight world line; scurve: wx - amp*sin(wy/period + phase).
+function hf_macro_phase_u(macro, wx, wy) =
+  (hf_macro_mode(macro) == "step")
+    ? let(
+        ang = hf_get(macro, 4, 0),
+        off = hf_get(macro, 5, 0),
+        nx = cos(ang),
+        ny = sin(ang)
+      )
+      (wx * nx + wy * ny) - off
+    : (hf_macro_mode(macro) == "scurve")
+      ? let(
+          amp = hf_get(macro, 4, 0),
+          period = max(1e-9, hf_get(macro, 5, 1)),
+          phase = hf_get(macro, 6, 0)
+        )
+        wx - amp * sin(wy * 360 / period + phase)
+      : 0;
+
+function hf_macro_band_w(macro) =
+  (hf_macro_mode(macro) == "step" || hf_macro_mode(macro) == "scurve")
+    ? max(1e-9, hf_get(macro, 3, 1))
+    : 0;
+
+// Macro height at world XY (no detail noise) — used for terrain and bevel anchors.
+function hf_macro_z_world(macro, wx, wy) =
+  (hf_macro_mode(macro) == "standable")
+    ? hf_get(macro, 1, 0)
+    : (hf_macro_mode(macro) == "step" || hf_macro_mode(macro) == "scurve")
+      ? let(
+          a = hf_get(macro, 1, 0),
+          b = hf_get(macro, 2, 0),
+          band_w = hf_macro_band_w(macro),
+          u = hf_macro_phase_u(macro, wx, wy),
+          t = hf_clamp((u + band_w / 2) / band_w, 0, 1),
+          s = hf_smoothstep(t)
+        )
+        hf_lerp(a, b, s)
+      : 0;
+
+// Detail noise mask: 1 inside slope band, fades to 0 at band edges.
+function hf_macro_band_mask(macro, wx, wy, band_fade = 0.15) =
+  (hf_macro_mode(macro) == "step" || hf_macro_mode(macro) == "scurve")
+    ? let(
+        band_w = hf_macro_band_w(macro),
+        u = abs(hf_macro_phase_u(macro, wx, wy)),
+        inner = band_w / 2,
+        fade = max(1e-9, band_w * hf_clamp(band_fade, 0, 0.49)),
+        t = hf_clamp((u - inner) / fade, 0, 1)
+      )
+      (1 - hf_smoothstep(t))
+    : 0;
+
+function hf_hex_edge_line_2d(hex_idx, edge_idx, hex_r) =
+  let(
+    c = hf_flower_pos_xy(hex_idx, hex_r),
+    pts = [for (p = hf_hex_pts(hex_r)) [p[0] + c[0], p[1] + c[1]]]
+  )
+  [pts[edge_idx], pts[(edge_idx + 1) % 6]];
+
 // --- rectangular triangular heightfield solid ---
 // Builds a closed solid from (x0..x1, y0..y1) with triangular tessellation.
-// The top surface is displaced by noise; bottom is flat at base_z.
+// The top surface is displaced by noise; bottom is flat at HF_FLOWER_BOTTOM_Z (z=0).
 //
 // Parameters:
 // - tri_step: approximate triangle edge length on the grid
@@ -145,7 +216,6 @@ module hf_tri_heightfield_rect_solid(
   x0, x1, y0, y1,
   tri_step,
   world_xy = [0, 0],
-  base_z = 0,
   thickness = 2,
   noise = [12, 1.0, 4, 0.5, 2.0, 0],
   // Legacy: quantize final height directly (kept for compatibility)
@@ -158,9 +228,9 @@ module hf_tri_heightfield_rect_solid(
   // `macro` encodes the macro height profile (relative to 0):
   // - ["standable", z]                         => z_macro is constant z everywhere, no noise.
   // - ["step", a, b, band_w, angle_deg, offset_world]
-  //     where the transition band is centered on the world-aligned line:
-  //       dot([wx,wy], [cos(angle), sin(angle)]) - offset_world = 0
-  //     and spans +/- band_w/2 around that line.
+  //     transition centered on dot([wx,wy],[cos,sin]) - offset_world = 0, width band_w.
+  // - ["scurve", a, b, band_w, amp, period, phase_deg]
+  //     transition centered on wx - amp*sin(wy*360/period + phase_deg) = 0 (S-shaped front).
   //
   // Detail noise is applied ONLY within the transition band.
   macro = ["standable", 0],
@@ -222,42 +292,9 @@ module hf_tri_heightfield_rect_solid(
     let(wy = y + world_xy[1])
     (floor(wy / max(1e-9, dy)) % 2 == 1) ? dx/2 : 0;
 
-  function macro_mode() = hf_get(macro, 0, "standable");
+  function macro_z(wx, wy) = hf_macro_z_world(macro, wx, wy);
 
-  function macro_z(wx, wy) =
-    (macro_mode() == "standable")
-      ? hf_get(macro, 1, 0)
-      : (macro_mode() == "step")
-        ? let(
-            a = hf_get(macro, 1, 0),
-            b = hf_get(macro, 2, 0),
-            band_w = max(1e-9, hf_get(macro, 3, 1)),
-            ang = hf_get(macro, 4, 0),
-            off = hf_get(macro, 5, 0),
-            nx = cos(ang),
-            ny = sin(ang),
-            u = (wx * nx + wy * ny) - off,
-            t = hf_clamp((u + band_w/2) / band_w, 0, 1),
-            s = hf_smoothstep(t)
-          )
-          hf_lerp(a, b, s)
-        : 0;
-
-  function band_mask(wx, wy) =
-    (macro_mode() == "step")
-      ? let(
-          band_w = max(1e-9, hf_get(macro, 3, 1)),
-          ang = hf_get(macro, 4, 0),
-          off = hf_get(macro, 5, 0),
-          nx = cos(ang),
-          ny = sin(ang),
-          u = abs((wx * nx + wy * ny) - off),
-          inner = band_w/2,
-          fade = max(1e-9, band_w * hf_clamp(band_fade, 0, 0.49)),
-          t = hf_clamp((u - inner) / fade, 0, 1)
-        )
-        (1 - hf_smoothstep(t))
-      : 0;
+  function band_mask(wx, wy) = hf_macro_band_mask(macro, wx, wy, band_fade);
 
   function detail_z(wx, wy, mask) =
     (mask <= 0) ? 0 :
@@ -283,13 +320,13 @@ module hf_tri_heightfield_rect_solid(
       wy = wp[1]
     )
     // NEW RULE PATH: explicit macro + masked detail.
-    (macro_mode() == "standable" || macro_mode() == "step")
+    hf_macro_is_ruled(macro)
       ? let(
           mz = macro_z(wx, wy),
           m = band_mask(wx, wy),
           dz = detail_z(wx, wy, m)
         )
-        base_z + thickness + mz + dz
+        HF_FLOWER_BOTTOM_Z + thickness + mz + dz
       // LEGACY PATH (deprecated): macro derived from noise.
       : let(
           wxn = wx / max(1e-9, freq),
@@ -310,8 +347,8 @@ module hf_tri_heightfield_rect_solid(
               nd = hf_fbm2(wx / fx2, wy / fx2, seed + legacy_d_seed_off, legacy_d_oct, legacy_d_pers, legacy_d_lac),
               detail = nd * (amp * legacy_d_amp_mult) * mask
             )
-            base_z + thickness + t + detail
-          : base_z + thickness + hf_quantize(z0, z_quant);
+            HF_FLOWER_BOTTOM_Z + thickness + t + detail
+          : HF_FLOWER_BOTTOM_Z + thickness + hf_quantize(z0, z_quant);
 
   // Vertex indexing: top first, then bottom.
   function idx_top(i, j) = j * nx + i;
@@ -335,7 +372,7 @@ module hf_tri_heightfield_rect_solid(
           y = vy(j),
           x = vx(i) + row_stagger(vx(i), y)
         )
-        [x, y, base_z]
+        [x, y, HF_FLOWER_BOTTOM_Z]
   ];
 
   function tri_keep_verts(idxs) =
@@ -438,7 +475,6 @@ module hf_trihex_noise_solid(
   hex_r = 5.1961525,
   world_xy = [0, 0],
   tri_step = 0.35,
-  base_z = 0,
   thickness = 2,
   noise = [12, 1.0, 4, 0.5, 2.0, 0],
   z_quant = 0.25,
@@ -461,7 +497,6 @@ module hf_trihex_noise_solid(
         x0, x1, y0, y1,
         tri_step = tri_step,
         world_xy = world_xy,
-        base_z = base_z,
         thickness = thickness,
         noise = noise,
         z_quant = z_quant,
@@ -484,10 +519,69 @@ module hf_flower_clip_prism(hex_r, h) {
         polygon(points = hf_hex_pts(hex_r));
 }
 
+module hf_flower_bevel_cutters(
+  hex_r,
+  thickness,
+  macro,
+  bevel_size = HF_BEVEL_SIZE
+) {
+  union() {
+    for (hi = [0 : 6])
+      let(center = hf_flower_pos_xy(hi, hex_r))
+      for (ei = [0 : 5])
+        let(
+          edge = hf_hex_edge_line_2d(hi, ei, hex_r),
+          mid = [(edge[0][0] + edge[1][0]) / 2, (edge[0][1] + edge[1][1]) / 2],
+          mz = hf_macro_z_world(macro, mid[0], mid[1]),
+          z_anchor = HF_FLOWER_BOTTOM_Z + thickness + mz,
+          line_3d = [
+            [edge[0][0], edge[0][1], z_anchor],
+            [edge[1][0], edge[1][1], z_anchor]
+          ]
+        )
+        hf_bevel_cutter(line_3d, bevel_size, z_anchor, center);
+  }
+}
+
+module hf_trihex_flower_body(
+  hex_r,
+  tri_step,
+  thickness,
+  noise,
+  z_quant,
+  macro,
+  detail,
+  band_fade,
+  terrace_step,
+  detail_noise,
+  mask_power,
+  clip_height
+) {
+  ext = hf_flower_extent(hex_r);
+  _tri_step = min(tri_step, hex_r / 12);
+  intersection() {
+    hf_tri_heightfield_rect_solid(
+      -ext, ext, -ext, ext,
+      tri_step = _tri_step,
+      world_xy = [0, 0],
+      thickness = thickness,
+      noise = noise,
+      z_quant = z_quant,
+      macro = macro,
+      detail = detail,
+      band_fade = band_fade,
+      terrace_step = terrace_step,
+      detail_noise = detail_noise,
+      mask_power = mask_power,
+      footprint = "none"
+    );
+    hf_flower_clip_prism(hex_r, clip_height);
+  }
+}
+
 module hf_trihex_noise_flower(
   hex_r = 5.1961525,
   tri_step = 0.28,
-  base_z = 0,
   thickness = 2,
   noise = [12, 1.0, 4, 0.5, 2.0, 0],
   z_quant = 0.25,
@@ -497,32 +591,30 @@ module hf_trihex_noise_flower(
   terrace_step = 0,
   detail_noise = [4, 0.35, 3, 0.55, 2.05, 9001],
   mask_power = 1.35,
-  clip_height = 100
+  clip_height = 100,
+  bevel_size = 0,
+  magnets = false,
+  magnet_center_z = HF_MAGNET_CENTER_Z
 ) {
-  // One world-space heightfield, one volume. Per-hex unions leave 7–8 separate
-  // volumes and visible gaps at junctions; a concave clip needs enough triangles.
-  ext = hf_flower_extent(hex_r);
-  _tri_step = min(tri_step, hex_r / 12);
-
   render(convexity = 10)
-    intersection() {
-      hf_tri_heightfield_rect_solid(
-        -ext, ext, -ext, ext,
-        tri_step = _tri_step,
-        world_xy = [0, 0],
-        base_z = base_z,
-        thickness = thickness,
-        noise = noise,
-        z_quant = z_quant,
-        macro = macro,
-        detail = detail,
-        band_fade = band_fade,
-        terrace_step = terrace_step,
-        detail_noise = detail_noise,
-        mask_power = mask_power,
-        footprint = "none"
+    if (bevel_size > 0 || magnets) {
+      difference() {
+        hf_trihex_flower_body(
+          hex_r, tri_step, thickness,
+          noise, z_quant, macro, detail, band_fade,
+          terrace_step, detail_noise, mask_power, clip_height
+        );
+        if (bevel_size > 0)
+          hf_flower_bevel_cutters(hex_r, thickness, macro, bevel_size);
+        if (magnets)
+          hf_flower_magnet_cutters(hex_r, magnet_center_z);
+      }
+    } else {
+      hf_trihex_flower_body(
+        hex_r, tri_step, thickness,
+        noise, z_quant, macro, detail, band_fade,
+        terrace_step, detail_noise, mask_power, clip_height
       );
-      hf_flower_clip_prism(hex_r, clip_height);
     }
 }
 
