@@ -67,9 +67,12 @@ def _build_flower_top_and_walls(
     bottom_z: float,
     subdivisions_per_edge: int,
     jitter_amplitude: float,
+    xy_jitter_mm: float,
     interior_grid_step: float | None,
     interior_relief_mm: float,
     include_hex_grooves: bool,
+    groove_depth_mm: float,
+    groove_width_mm: float,
     road_water_side_pairs: Sequence[tuple[int, int]],
     road_subdivisions: int,
 ) -> tuple[
@@ -105,6 +108,7 @@ def _build_flower_top_and_walls(
             level_z,
             subdivisions_per_edge=subdivisions_per_edge,
             jitter_amplitude=jitter_amplitude,
+            xy_jitter_mm=xy_jitter_mm,
         )
         final_vertices_3d, top_triangles = build_flower_mesh_with_road(
             boundary_loop_3d,
@@ -127,7 +131,10 @@ def _build_flower_top_and_walls(
             seed,
             subdivisions_per_edge=subdivisions_per_edge,
             jitter_amplitude=jitter_amplitude,
+            xy_jitter_mm=xy_jitter_mm,
             interior_relief_mm=interior_relief_mm,
+            groove_depth_mm=groove_depth_mm,
+            groove_width_mm=groove_width_mm,
         )
         boundary_count = len(boundary_indices)
         final_points_2d = [(x, y) for x, y, _ in final_vertices_3d]
@@ -139,6 +146,7 @@ def _build_flower_top_and_walls(
             seed,
             subdivisions_per_edge=subdivisions_per_edge,
             jitter_amplitude=jitter_amplitude,
+            xy_jitter_mm=xy_jitter_mm,
             interior_grid_step=interior_grid_step,
             interior_relief_mm=interior_relief_mm,
         )
@@ -175,9 +183,12 @@ def build_flower_surface_mesh(
     bottom_z: float = 0.0,
     subdivisions_per_edge: int = 8,
     jitter_amplitude: float = 0.3,
+    xy_jitter_mm: float = 0.0,
     interior_grid_step: float | None = None,
     interior_relief_mm: float = 6.0,
     include_hex_grooves: bool = False,
+    groove_depth_mm: float = 0.0,
+    groove_width_mm: float = 2.0,
     road_water_side_pairs: Sequence[tuple[int, int]] = (),
     road_subdivisions: int = 10,
 ) -> trimesh.Trimesh:
@@ -219,9 +230,12 @@ def build_flower_surface_mesh(
         bottom_z=bottom_z,
         subdivisions_per_edge=subdivisions_per_edge,
         jitter_amplitude=jitter_amplitude,
+        xy_jitter_mm=xy_jitter_mm,
         interior_grid_step=interior_grid_step,
         interior_relief_mm=interior_relief_mm,
         include_hex_grooves=include_hex_grooves,
+        groove_depth_mm=groove_depth_mm,
+        groove_width_mm=groove_width_mm,
         road_water_side_pairs=road_water_side_pairs,
         road_subdivisions=road_subdivisions,
     )
@@ -242,9 +256,12 @@ def build_flower_open_solid(
     bottom_z: float,
     subdivisions_per_edge: int = 8,
     jitter_amplitude: float = 0.3,
+    xy_jitter_mm: float = 0.0,
     interior_grid_step: float | None = None,
     interior_relief_mm: float = 6.0,
     include_hex_grooves: bool = False,
+    groove_depth_mm: float = 0.0,
+    groove_width_mm: float = 2.0,
     road_water_side_pairs: Sequence[tuple[int, int]] = (),
     road_subdivisions: int = 10,
 ) -> tuple[list[tuple[float, float, float]], list[tuple[int, int, int]], list[int]]:
@@ -268,9 +285,12 @@ def build_flower_open_solid(
         bottom_z=bottom_z,
         subdivisions_per_edge=subdivisions_per_edge,
         jitter_amplitude=jitter_amplitude,
+        xy_jitter_mm=xy_jitter_mm,
         interior_grid_step=interior_grid_step,
         interior_relief_mm=interior_relief_mm,
         include_hex_grooves=include_hex_grooves,
+        groove_depth_mm=groove_depth_mm,
+        groove_width_mm=groove_width_mm,
         road_water_side_pairs=road_water_side_pairs,
         road_subdivisions=road_subdivisions,
     )

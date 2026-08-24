@@ -67,20 +67,26 @@ def test_flat_plains_center_hex_is_standable(tileset) -> None:
     """decision #11's positive case: with relief/jitter turned off, a
     flower with uniform declared heights is genuinely flat and standable.
 
-    Not built with default jitter_amplitude/interior_relief_mm: those
-    (0.3 * 15mm one_level_z = 4.5mm jitter swing, 6mm interior relief
-    amplitude) apply unconditionally to every hex's boundary and interior
-    corners regardless of declared height (decision #5 - interior relief
-    is deliberately independent of the boundary contract), and both
-    exceed flatness_tolerance_mm's default of 1.0mm on their own. Under
-    those defaults even flat_plains legitimately has 0 standable hexes -
-    that's not a bug, just a stronger statement than this test needs to
-    make. This test isolates the specific claim decision #11 requires: a
+    Not built with default jitter_amplitude/interior_relief_mm/groove_depth_mm:
+    those (0.3 * 15mm one_level_z = 4.5mm jitter swing, 6mm interior relief
+    amplitude, and a real engraved groove reaching its full nominal depth
+    now that groove width is decoupled from mesh resolution) apply
+    unconditionally to every hex's boundary/interior/edge-adjacent points
+    regardless of declared height (decision #5 - interior relief is
+    deliberately independent of the boundary contract), and each exceeds
+    flatness_tolerance_mm's default of 1.0mm on its own. Under those
+    defaults even flat_plains legitimately has 0 standable hexes - that's
+    not a bug, just a stronger statement than this test needs to make.
+    This test isolates the specific claim decision #11 requires: a
     uniform-height flower CAN be standable, once nothing is sculpting it
     away from flat.
     """
     mesh = build_flower_mesh(
-        tileset, "flat_plains", jitter_amplitude=0.0, interior_relief_mm=0.0
+        tileset,
+        "flat_plains",
+        jitter_amplitude=0.0,
+        interior_relief_mm=0.0,
+        groove_depth_mm=0.0,
     )
     ok, count, _ = standability_report(mesh, tileset)
     assert count >= 1

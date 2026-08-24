@@ -40,9 +40,17 @@ def _smootherstep(t: float) -> float:
     return t * t * t * (t * (t * 6 - 15) + 10)
 
 
-def _lattice_jitter(seed_ints: tuple[int, ...], lattice_index: int) -> float:
-    """Deterministic jitter in [-1, 1] for one coarse lattice point."""
-    return hash_to_unit_interval(*seed_ints, lattice_index) * 2.0 - 1.0
+def _lattice_jitter(
+    seed_ints: tuple[int, ...], lattice_index: int, channel: int = 0
+) -> float:
+    """Deterministic jitter in [-1, 1] for one coarse lattice point.
+
+    `channel` decorrelates independent noise streams driven by the SAME
+    (seed_ints, lattice_index) - e.g. boundary Z-jitter (channel 0) vs.
+    sideways XY-jitter (channel 1) - without touching seed_ints itself,
+    which canonicalize_sequence_position's reversal logic depends on
+    staying a pure corner-height sequence."""
+    return hash_to_unit_interval(*seed_ints, lattice_index, channel) * 2.0 - 1.0
 
 
 def canonicalize_sequence_position(
@@ -85,6 +93,7 @@ def sample_noise_1d(
     total: float,
     *,
     lattice_step: float = 4.0,
+    channel: int = 0,
 ) -> float:
     """Deterministic, smoothly-varying noise in [-1, 1] at a continuous 1D
     position along a run of length `total`, built by interpolating between
@@ -92,14 +101,19 @@ def sample_noise_1d(
     static. Canonicalized first (see canonicalize_sequence_position) so the
     result is identical regardless of which direction the caller happens to
     be walking the shared boundary from.
+
+    `channel` selects an independent noise stream from the same
+    canonicalized (sequence, position) - e.g. boundary Z-jitter vs. a
+    second, decorrelated sideways XY-jitter - without disturbing
+    seed_ints/reversal semantics.
     """
     seed_ints, position = canonicalize_sequence_position(seed_ints, position, total)
     lattice_pos = position / lattice_step
     i0 = math.floor(lattice_pos)
     i1 = i0 + 1
     t = lattice_pos - i0
-    v0 = _lattice_jitter(seed_ints, i0)
-    v1 = _lattice_jitter(seed_ints, i1)
+    v0 = _lattice_jitter(seed_ints, i0, channel)
+    v1 = _lattice_jitter(seed_ints, i1, channel)
     return v0 + (v1 - v0) * _smootherstep(t)
 
 

@@ -9,6 +9,7 @@ match with nothing else exchanged or stored.
 
 from __future__ import annotations
 
+import math
 from typing import Callable, Sequence
 
 from terrain.boundary_noise import sample_noise_1d, sample_noise_2d
@@ -27,6 +28,7 @@ def build_side_boundary_vertices(
     *,
     subdivisions_per_edge: int = 8,
     jitter_amplitude: float = 0.3,
+    xy_jitter_mm: float = 0.0,
 ) -> list[Vertex3D]:
     """Build the fine, jagged 3D contour along one flower side.
 
@@ -41,6 +43,32 @@ def build_side_boundary_vertices(
     need to know about this, since terrain/boundary_noise.py canonicalizes
     (sequence, position) before hashing so the reversed declaration still
     produces a bit-identical physical contour.
+
+    `xy_jitter_mm` additionally displaces each point SIDEWAYS (in-plane,
+    perpendicular to the local edge), so the boundary's XY path itself
+    wiggles instead of only its Z height - matching decision #4's
+    determinism the same way Z-jitter does, but a signed 2D displacement
+    has a handedness problem Z (an unsigned scalar) never had: naively
+    using "rotate MY OWN p0->p1 direction by 90 degrees" would put the
+    bump on physically OPPOSITE sides for the two flowers sharing this
+    edge, because their local walk directions along the same physical
+    segment are always opposite (this holds even for a palindromic
+    corner-height sequence - the walk-direction mismatch is a pure
+    geometry fact, unrelated to what heights are declared, so the
+    sequence-based tie-break canonicalize_sequence_position uses for
+    position can't resolve it). Fixed by deriving the perpendicular's
+    sign from the sub-edge's own two endpoint coordinates instead of
+    "which one is p0 vs p1": always point from the lexicographically
+    smaller local point to the larger one. Lexicographic point comparison
+    is translation-invariant (subtracting either flower's own placement
+    offset from both endpoints before comparing doesn't change which one
+    sorts first), so both flowers derive the identical world-space
+    perpendicular for the physically shared sub-edge regardless of which
+    one of them calls p0 vs p1, sequence, or reversal. The corners
+    themselves (t=0 and t=1) are never displaced - only interior points
+    move - since many other code paths key off the exact declared corner
+    XY (hex_edge_line, side_corners, road entry points, the canonical-
+    vertex registry).
     """
     n_edges = len(side_geom) - 1
     if len(corner_heights) != n_edges + 1:
@@ -54,18 +82,38 @@ def build_side_boundary_vertices(
     vertices: list[Vertex3D] = []
     for edge_idx in range(n_edges):
         p0, p1 = side_geom[edge_idx], side_geom[edge_idx + 1]
+        edge_dx, edge_dy = p1[0] - p0[0], p1[1] - p0[1]
+        edge_len = math.hypot(edge_dx, edge_dy)
+        canon_dx, canon_dy = edge_dx, edge_dy
+        if edge_len > 1e-9 and (round(p1[0], 6), round(p1[1], 6)) < (
+            round(p0[0], 6),
+            round(p0[1], 6),
+        ):
+            canon_dx, canon_dy = -edge_dx, -edge_dy
+        perp_x, perp_y = (
+            (-canon_dy / edge_len, canon_dx / edge_len) if edge_len > 1e-9 else (0.0, 0.0)
+        )
         z0 = level_z(corner_heights[edge_idx])
         z1 = level_z(corner_heights[edge_idx + 1])
         is_last_edge = edge_idx == n_edges - 1
         step_count = subdivisions_per_edge + (1 if is_last_edge else 0)
         for step in range(step_count):
             t = step / subdivisions_per_edge
-            x = p0[0] + (p1[0] - p0[0]) * t
-            y = p0[1] + (p1[1] - p0[1]) * t
+            base_x = p0[0] + edge_dx * t
+            base_y = p0[1] + edge_dy * t
             base_z = z0 + (z1 - z0) * t
             global_pos = edge_idx * subdivisions_per_edge + step
-            jitter = sample_noise_1d(corner_heights, float(global_pos), total_positions)
+            jitter = sample_noise_1d(
+                corner_heights, float(global_pos), total_positions, channel=0
+            )
             z = base_z + jitter * jitter_amplitude * one_level_z
+            window = 4.0 * t * (1.0 - t)  # 0 at the true corners, 1 at t=0.5
+            xy_jitter = sample_noise_1d(
+                corner_heights, float(global_pos), total_positions, channel=1
+            )
+            offset = xy_jitter * window * xy_jitter_mm
+            x = base_x + perp_x * offset
+            y = base_y + perp_y * offset
             vertices.append((x, y, z))
     return vertices
 
@@ -77,6 +125,7 @@ def build_flower_boundary_loop(
     *,
     subdivisions_per_edge: int = 8,
     jitter_amplitude: float = 0.3,
+    xy_jitter_mm: float = 0.0,
 ) -> list[Vertex3D]:
     """The full closed flower boundary contour: one build_side_boundary_vertices
     run per side, concatenated. FlowerLayout.side_corners()'s 6 sides chain
@@ -95,6 +144,7 @@ def build_flower_boundary_loop(
             level_z,
             subdivisions_per_edge=subdivisions_per_edge,
             jitter_amplitude=jitter_amplitude,
+            xy_jitter_mm=xy_jitter_mm,
         )
         loop.extend(verts[:-1])
     return loop
@@ -134,6 +184,7 @@ def build_flower_pslg(
     *,
     subdivisions_per_edge: int = 8,
     jitter_amplitude: float = 0.3,
+    xy_jitter_mm: float = 0.0,
     interior_grid_step: float | None = None,
     interior_relief_mm: float = 6.0,
 ) -> tuple[list[Point2D], list[Vertex3D], int]:
@@ -154,6 +205,7 @@ def build_flower_pslg(
         level_z,
         subdivisions_per_edge=subdivisions_per_edge,
         jitter_amplitude=jitter_amplitude,
+        xy_jitter_mm=xy_jitter_mm,
     )
     boundary_2d = [(v[0], v[1]) for v in boundary_3d]
     # Corner samples (one per declared side corner, at every
@@ -193,11 +245,36 @@ def build_flower_cells(
     *,
     subdivisions_per_edge: int = 8,
     jitter_amplitude: float = 0.3,
+    xy_jitter_mm: float = 0.0,
     interior_relief_mm: float = 6.0,
+    groove_depth_mm: float = 0.0,
+    groove_width_mm: float = 2.0,
 ) -> tuple[list[Vertex3D], list[Vertex3D], list[Triangle]]:
     """Triangulate each of the flower's 7 hex cells INDEPENDENTLY, as its
     own simple hexagon, instead of one Delaunay pass over the whole
     flower's interior.
+
+    `groove_depth_mm` (decision #10) carves a real, visible/tactile
+    recessed channel tracing each cell's own 6-edge outline, so hex-cell
+    boundaries are distinguishable at a glance (and by touch) for
+    counting distances - not just a guaranteed mesh edge along the seam
+    (which is all "groove" meant before: a topological guarantee, not an
+    actual depression in the surface). It's built as a dedicated thin
+    strip of NEW geometry per wedge, between the true edge (untouched -
+    still the literal shared vertex the boundary contract/neighboring
+    cell rely on) and an "inset" row pulled exactly `groove_width_mm`
+    toward the apex at full undisturbed height, which becomes the coarse
+    interior grid's new outer boundary. This keeps the depression confined
+    to a strip of the requested width regardless of subdivisions_per_edge
+    - an earlier version depressed whichever existing interior grid rows
+    happened to fall within groove_width_mm of the edge, which could
+    (and, at the shipped default resolution, did) vanish to a completely
+    invisible 0mm if a single grid step was already wider than
+    groove_width_mm. The offset/depth taper to exactly 0 at each wedge
+    corner (a `min(t, 1-t)` window over the strip's own j=0..n parameter),
+    so the strip's corner points degenerate to the corner itself - already
+    shared via spokes - with no separate stitching needed where 3 wedges'
+    worth of strips would otherwise meet.
 
     This exists specifically so hex-to-hex boundaries can be engraved as
     real grooves (decision #10): triangulating per-cell, rather than one
@@ -284,6 +361,7 @@ def build_flower_cells(
             level_z,
             subdivisions_per_edge=subdivisions_per_edge,
             jitter_amplitude=jitter_amplitude,
+            xy_jitter_mm=xy_jitter_mm,
         )
 
     # local_edge_idx -> (fine 3D points, (side_idx, abs start position in
@@ -483,6 +561,81 @@ def build_flower_cells(
             spoke_j = spokes[(edge_idx + 1) % FlowerLayout.EDGES_PER_HEX]
             grid_cache: dict[tuple[int, int], Vertex3D] = {}
 
+            # The groove is a dedicated thin strip of NEW geometry between
+            # the true edge (far_edge, untouched - still the literal shared
+            # vertex the flower's boundary contract / the neighboring cell
+            # across an internal edge rely on) and an "inset" row pulled
+            # groove_width_mm toward the apex, at full undisturbed height -
+            # the coarse interior grid attaches to THIS inset row instead
+            # of the true edge, so the depression is confined to a strip of
+            # exactly groove_width_mm regardless of subdivisions_per_edge,
+            # not smeared across however much of the interior grid happens
+            # to fall within groove_width_mm of the edge (the previous
+            # approach - which could vanish entirely if one grid step was
+            # already wider than groove_width_mm, an invisible-groove bug
+            # caught by directly measuring the real scaled output before
+            # shipping).  The offset/depth both taper to exactly 0 at each
+            # of the wedge's 2 corners (window below), so the strip's own
+            # corner points degenerate to the corner itself - already a
+            # shared vertex via spokes - rather than needing new stitching
+            # logic where 3 wedges' worth of strips would otherwise meet.
+            # far_edge[0] and far_edge[n] are this wedge's OWN raw corner
+            # computations (this side's independent noise sample at that
+            # position) - for an internal, same-hex wedge corner they're
+            # bit-identical to spoke_i[n]/spoke_j[n] (same list slice), but
+            # at one of the flower's 6 side-to-side silhouette junctions
+            # they are NOT: the coarse grid (grid_point's J==0/I==0
+            # branches) always resolves that corner via spoke_i[n]/
+            # spoke_j[n], which for an internal-edge-adjacent corner chains
+            # through canonical_point's dedup registry to whichever side
+            # was processed last - a different, non-bit-identical value
+            # from this side's own far_edge[n]. Using far_edge[j] directly
+            # for the corner-adjacent strip points reproduced exactly that
+            # discrepancy (found via a real hill_peak build: two vertices
+            # at the same rounded XY, Z differing by ~0.07mm, a genuine
+            # non-watertight hole) - so the strip must reuse the SAME
+            # spoke corner objects the coarse grid does, not far_edge's own.
+            def far_edge_at(j: int) -> Vertex3D:
+                if j == 0:
+                    return spoke_i[n]
+                if j == n:
+                    return spoke_j[n]
+                return far_edge[j]
+
+            inset_line = far_edge
+            if groove_depth_mm > 0.0 and groove_width_mm > 0.0:
+                ci, cj = far_edge_at(0), far_edge_at(n)
+                edge_dx, edge_dy = cj[0] - ci[0], cj[1] - ci[1]
+                edge_len = math.hypot(edge_dx, edge_dy)
+                if edge_len > 1e-9:
+                    nx, ny = -edge_dy / edge_len, edge_dx / edge_len
+                    if nx * (apex[0] - ci[0]) + ny * (apex[1] - ci[1]) < 0:
+                        nx, ny = -nx, -ny
+                    margin = 1.0 / n
+                    computed_inset: list[Vertex3D] = []
+                    for j in range(n + 1):
+                        t = j / n
+                        window = min(1.0, min(t, 1.0 - t) / margin)
+                        if window <= 0.0:
+                            # Exactly at a wedge corner: reuse the corner's
+                            # own vertex object (spokes[...][n] / far_edge's
+                            # own endpoint) rather than recomputing an
+                            # approximately-equal point via interior_z - a
+                            # different formula than however this corner's
+                            # real Z was established (the boundary contract
+                            # or an internal edge), so a recomputed copy
+                            # would not be bit-identical and would leave a
+                            # hairline crack instead of degenerating cleanly
+                            # into the existing shared vertex.
+                            computed_inset.append(far_edge_at(j))
+                            continue
+                        ex, ey, _ = far_edge[j]
+                        ix = ex + nx * groove_width_mm * window
+                        iy = ey + ny * groove_width_mm * window
+                        iz = interior_z(ix, iy) - groove_depth_mm * window
+                        computed_inset.append((ix, iy, iz))
+                    inset_line = computed_inset
+
             def grid_point(I: int, J: int) -> Vertex3D:
                 cached = grid_cache.get((I, J))
                 if cached is not None:
@@ -492,7 +645,7 @@ def build_flower_cells(
                 elif I == 0:
                     v = spoke_j[J]
                 elif I + J == n:
-                    v = far_edge[J]
+                    v = inset_line[J]
                 else:
                     x = apex[0] + (spoke_i[n][0] - apex[0]) * (I / n) + (
                         spoke_j[n][0] - apex[0]
@@ -513,6 +666,18 @@ def build_flower_cells(
                     if I + J < n - 1:
                         p4 = local_index(grid_point(I + 1, J + 1))
                         all_triangles.append((p2 + offset, p4 + offset, p3 + offset))
+
+            if inset_line is not far_edge:
+                for j in range(n):
+                    a = local_index(far_edge_at(j))
+                    b = local_index(far_edge_at(j + 1))
+                    c = local_index(inset_line[j])
+                    d = local_index(inset_line[j + 1])
+                    for tri in ((a, b, c), (b, d, c)):
+                        if len(set(tri)) == 3:
+                            all_triangles.append(
+                                (tri[0] + offset, tri[1] + offset, tri[2] + offset)
+                            )
 
         for edge_idx in exterior_edges:
             side_idx, start = exterior_fine_meta[hex_idx][edge_idx]

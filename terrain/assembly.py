@@ -27,8 +27,11 @@ def build_flower_mesh(
     *,
     subdivisions_per_edge: int = 8,
     jitter_amplitude: float = 0.05,
+    xy_jitter_mm: float = 1.0,
     interior_relief_mm: float = 1.0,
     include_hex_grooves: bool = True,
+    groove_depth_mm: float = 1.5,
+    groove_width_mm: float = 6.0,
     plate_depth: float = BASE_PLATE_DEPTH,
     magnet_center_z: float = MAGNET_CENTER_Z,
     magnet_radius: float = MAGNET_RADIUS,
@@ -62,8 +65,11 @@ def build_flower_mesh(
         bottom_z=bottom_z,
         subdivisions_per_edge=subdivisions_per_edge,
         jitter_amplitude=jitter_amplitude,
+        xy_jitter_mm=xy_jitter_mm,
         interior_relief_mm=interior_relief_mm,
         include_hex_grooves=include_hex_grooves and not road_water_side_pairs,
+        groove_depth_mm=groove_depth_mm,
+        groove_width_mm=groove_width_mm,
         road_water_side_pairs=road_water_side_pairs,
     )
 

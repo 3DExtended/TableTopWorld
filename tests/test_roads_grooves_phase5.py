@@ -51,6 +51,50 @@ def test_flower_with_grooves_is_still_watertight(layout: FlowerLayout) -> None:
     assert mesh.volume > 0
 
 
+def test_groove_depth_actually_depresses_the_surface(layout: FlowerLayout) -> None:
+    """Regression test for the difference between "groove" as a mere
+    guaranteed mesh edge (what include_hex_grooves alone gave before -
+    real topology, but no depth at all, so nothing was actually visible
+    or tactile on a print) and a real carved recess a human can see/feel
+    for counting hex distances. With groove_depth_mm=0 (the historical
+    behavior) every interior vertex should sit at exactly the flat
+    interior height; with groove_depth_mm>0, some vertices near each
+    cell's own edges must sit measurably below it."""
+    flat_mesh = build_flower_surface_mesh(
+        FLAT_SIDES,
+        layout,
+        LEVELS.z,
+        seed=1,
+        include_hex_grooves=True,
+        jitter_amplitude=0.0,
+        xy_jitter_mm=0.0,
+        interior_relief_mm=0.0,
+        groove_depth_mm=0.0,
+    )
+    assert flat_mesh.vertices[:, 2].max() - flat_mesh.vertices[:, 2].min() < 1e-9
+
+    grooved_mesh = build_flower_surface_mesh(
+        FLAT_SIDES,
+        layout,
+        LEVELS.z,
+        seed=1,
+        include_hex_grooves=True,
+        jitter_amplitude=0.0,
+        xy_jitter_mm=0.0,
+        interior_relief_mm=0.0,
+        groove_depth_mm=1.5,
+        groove_width_mm=2.5,
+    )
+    # The true edge/corner/spoke vertices are deliberately never modified
+    # (they're shared with the flower's own boundary contract and with
+    # the neighboring cell across each internal edge - see
+    # build_flower_cells' groove_offset), so the deepest achievable point
+    # is the closest INTERIOR grid row, one grid step in from the edge -
+    # short of the full groove_depth_mm, not equal to it.
+    depression = flat_mesh.vertices[:, 2].max() - grooved_mesh.vertices[:, 2].min()
+    assert 0.5 < depression <= 1.5 + 1e-6
+
+
 def test_hex_grooves_are_embedded_as_direct_mesh_edges(layout: FlowerLayout) -> None:
     """Every internal hex-to-hex edge must be embedded as a chain of REAL
     direct mesh edges corner-to-corner, not merely a run of vertices that

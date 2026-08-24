@@ -99,6 +99,48 @@ def test_palindromic_sequence_also_matches_across_the_shared_boundary() -> None:
         assert forward == list(reversed(backward)), f"mismatch for palindrome {seq}"
 
 
+def test_xy_jitter_also_matches_across_the_shared_boundary() -> None:
+    """Regression test for the sideways (in-plane) jitter added on top of
+    the existing Z-only jitter: a naive "rotate my own p0->p1 direction by
+    90 degrees" perpendicular would put the wiggle on physically OPPOSITE
+    sides for the two flowers sharing this edge, since their local walk
+    directions along the same physical segment are always opposite (see
+    build_side_boundary_vertices' own docstring) - true even for a
+    palindrome, where the sequence carries no directional information at
+    all. Covers both the non-palindrome and palindrome cases, since they
+    take different paths through canonicalize_sequence_position."""
+    forward = build_side_boundary_vertices(
+        (1, 2, 3, 4), SIDE_GEOM, level_z, xy_jitter_mm=2.0
+    )
+    reversed_geom = list(reversed(SIDE_GEOM))
+    backward = build_side_boundary_vertices(
+        (4, 3, 2, 1), reversed_geom, level_z, xy_jitter_mm=2.0
+    )
+    assert forward == list(reversed(backward))
+
+    for seq in [(0, 0, 0, 0), (1, 2, 2, 1), (3, 3, 3, 3)]:
+        fwd = build_side_boundary_vertices(seq, SIDE_GEOM, level_z, xy_jitter_mm=2.0)
+        bwd = build_side_boundary_vertices(
+            seq, reversed_geom, level_z, xy_jitter_mm=2.0
+        )
+        assert fwd == list(reversed(bwd)), f"mismatch for palindrome {seq}"
+
+
+def test_xy_jitter_leaves_declared_corners_exactly_in_place() -> None:
+    """The sideways offset must taper to 0 at the true corners (t=0, t=1)
+    - many other code paths (hex_edge_line, side_corners, road entry
+    points, the canonical-vertex registry) key off the exact declared
+    corner XY, so moving it would break far more than just this
+    function."""
+    verts = build_side_boundary_vertices(
+        (1, 2, 3, 4), SIDE_GEOM, level_z, xy_jitter_mm=5.0
+    )
+    assert verts[0][:2] == SIDE_GEOM[0]
+    assert verts[8][:2] == SIDE_GEOM[1]
+    assert verts[16][:2] == SIDE_GEOM[2]
+    assert verts[-1][:2] == SIDE_GEOM[3]
+
+
 def test_forward_declaration_on_both_sides_does_not_match() -> None:
     """Sanity check on the contract itself: declaring the SAME (not
     reversed) sequence on both sides of a shared boundary must NOT

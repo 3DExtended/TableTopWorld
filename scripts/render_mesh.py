@@ -47,6 +47,17 @@ def render_mesh(
     z = tris[:, :, 2].mean(axis=1)
     z_norm = (z - z.min()) / max(z.max() - z.min(), 1e-9)
     colors = plt.cm.terrain(0.25 + 0.5 * z_norm)
+    # Lambert shading from face normals, layered on top of the height
+    # colormap: a flat height-only color barely moves across a shallow
+    # local depression (e.g. a ~1mm engraved groove against 40+mm of
+    # overall terrain relief), so fine surface detail like grooves reads
+    # as invisible even though the geometry is genuinely there. Shading
+    # reveals it the way real light on a print would.
+    light = np.array([0.3, 0.3, 1.0])
+    light = light / np.linalg.norm(light)
+    brightness = np.clip(mesh.face_normals @ light, 0.35, 1.0)
+    colors = np.clip(colors[:, :3] * brightness[:, None], 0, 1)
+    colors = np.concatenate([colors, np.ones((len(colors), 1))], axis=1)
 
     bounds = mesh.bounds
     center = bounds.mean(axis=0)
