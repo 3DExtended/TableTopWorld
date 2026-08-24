@@ -1,167 +1,152 @@
 # 3D modular hex-flower terrain
 
-**Overview:** Extend the existing 7-hex flower generator into a declarative 3D terrain system: three terrain heights (~2 cm per step at print scale), water one step below local terrain, standardized edge profiles on all 18 exterior sides, and a tileset YAML that drives sample flowers plus a manual combined preview map—with a follow-up milestone for rule-aware auto-layout.
+> **Superseded design note:** this plan originally described refactoring the
+> existing CSG/solid2/BOSL2 generator (`printableFiles/hexagon.py`) with a
+> named edge-profile catalog. That approach was replaced entirely by an
+> **explicit-mesh** generator — heightfield-driven vertices/faces via
+> `trimesh`, no CSG booleans, no profile catalog (matching is direct numeric
+> equality of 4-corner height sequences instead). This document has been
+> rewritten to describe the system as actually built. The full phase-by-phase
+> build log — every bug found, why each library was chosen, every design
+> decision and its rationale — lives in
+> [`.claude/plans/elegant-twirling-scott.md`](../../.claude/plans/elegant-twirling-scott.md);
+> this file is a shorter, stable summary of the result.
 
-## What you are building (shared understanding)
+**Overview:** A declarative 3D terrain system built around the existing
+7-hex flower unit: discrete per-hex height levels, a true 18-edge zigzag
+silhouette (not a simplified hexagon) as the physical mating boundary,
+deterministic hash-based noise for the jagged boundary contour, engraved
+per-hex grooves, roads/rivers that cross flower boundaries, and a tileset
+YAML that drives sample flowers plus a manual combined preview map.
 
-A **tabletop hex terrain product** where the printable unit stays the **7-hex flower** ([`printableFiles/hexagon.py`](../../printableFiles/hexagon.py)), magneted on exterior sides like today. Each flower is a sculpted base plate, not seven separate prints.
+## What was built (shared understanding)
 
-**Gameplay surface rules (from grill):**
+A **tabletop hex terrain product** where the printable unit is the **7-hex
+flower**, magneted on exterior sides. Each flower is one sculpted, welded
+solid (terrain surface + base plate), not a CSG assembly of separate pieces.
 
-- Each of the 7 hex cells is **discrete**: either **mini-standable** (flat pad) or **non-standable** (changes height, blocks, road channel, water, slope, etc.).
-- Every flower must have **≥1 standable** hex.
-- **Terrain height** is 3 levels: `ground`, `middle`, `high` (~**2 cm per step** at print scale — dramatic relief).
-- **Water** sits **one terrain step below** the local hex’s terrain height (can read as “slightly below” the surface).
-- **Roads** remain **carved channels** at the hosting hex’s terrain height (same idea as today’s `street_indent_height`, generalized per level).
-- **Combinations** (e.g. road + river → bridge with stand-under and stand-on) are in scope conceptually; **bridge/deck as magnet toppings** lands **after MVP**.
-- **Modularity across flowers** is enforced by **18 standardized exterior hex edges** (6 ring hexes × 3 outward-facing sides each): each edge has a **profile** from a catalog; two flowers may connect only if joined profiles are compatible.
-- **Authoring**: a **tileset definition file** (YAML) lists all flowers + rules; you want a **combined terrain preview** and eventually a **small map generator** that places every flower at least once while respecting adjacency—**MVP uses a manual preview map**; auto-layout is milestone 2 once profiles validate.
+**Gameplay/design rules:**
+
+- Each of the 7 hex cells declares a discrete height level (validation/authoring metadata; only `side_corner_heights` and the per-flower `seed` currently drive the generated mesh — see the PRD's "Out of Scope").
+- Standability (**≥1 standable hex**, configurable, may be 0) is checked **after generation**, against the real mesh — not guaranteed by construction.
+- Height levels: a configurable count (default 4), 15mm per level.
+- No cap on the delta between adjacent boundary corners — cliffs are wanted, not a bug.
+- Modularity across flowers is enforced by the flower's own true 18-edge silhouette, grouped into **6 sides of 4 corners each**. Two flowers may share a side only if their 4 corner-height sequences match numerically once correctly oriented (the neighbor declares the reverse sequence — see decision #4 below). No profile catalog.
+- The fine jagged contour between a side's 4 corners is a **pure deterministic function** of (corner heights, position along the run) — bit-identical across independently-built flowers with matching declarations.
+- The interior (everything not on the boundary) is freeform, seeded per flower, and never affects the boundary contract.
+- Roads/rivers cross flower boundaries by starting/ending exactly at a side's corner positions.
+- Authoring: a tileset YAML lists all flowers + a manual `preview_map`; auto-layout is out of scope.
 
 ```mermaid
 flowchart TB
   subgraph authoring [Authoring]
     TilesetYAML[tileset.yaml]
   end
-  subgraph core [Generator]
-    Schema[Tile schema + validation]
-    Edges[18 edge profiles]
-    HexMesh[Per-hex height + role mesh]
-    Features[Road / water booleans]
-    Export[SCAD/STL per flower]
+  subgraph core [Generator - explicit mesh, no CSG]
+    Schema[terrain/tileset.py - load + validate]
+    Noise[terrain/boundary_noise.py - deterministic hash noise]
+    Heightfield[terrain/heightfield.py - boundary + PSLG + grooves]
+    Tri[terrain/triangulate.py - earcut wrapper]
+    Roads[terrain/roads.py - cross-flower road/river]
+    Surface[terrain/surface_mesh.py - Trimesh top+walls]
+    Plate[terrain/base_plate.py - welded flat base + magnets]
+    Standability[terrain/standability.py - post-gen flatness check]
+    Export[terrain/export.py - watertight-gated STL]
   end
   subgraph preview [Preview]
     ManualMap[preview_map in YAML]
-    Combined[Combined SCAD assembly]
-  end
-  subgraph later [Milestone 2]
-    AutoMap[Adjacency solver map]
+    Combined[terrain/assembly.py::build_preview_mesh]
   end
   TilesetYAML --> Schema
-  Schema --> Edges --> HexMesh --> Features --> Export
+  Schema --> Heightfield
+  Noise --> Heightfield
+  Heightfield --> Tri --> Surface
+  Roads --> Surface
+  Surface --> Plate --> Export
+  Plate --> Standability
   Schema --> ManualMap --> Combined
-  Schema -.-> AutoMap --> Combined
 ```
 
-## Current codebase leverage
-
-[`printableFiles/hexagon.py`](../../printableFiles/hexagon.py) already encodes the hard parts to preserve:
-
-| Existing piece | Reuse for 3D |
-|----------------|--------------|
-| 7-hex flower layout + `innerHexagonSize` spacing | Same graph; add Z per cell |
-| `outerHexagonVertecies` + edge lines | Attach **edge profile** metadata to each exterior side |
-| `getOuterHexFlowerLines` / `getCenterOfThreeLines` | Road/water entry at **3-hex junctions** (6 per flower) |
-| `addBevel`, `addMagnetHoleOnSide` | Keep on exterior edges; extend bevel depth with height delta |
-| `path_sweep` + bezier streets | Road channel cutter, lifted to hex’s terrain Z |
-| Magnet + topping holes | Unchanged for MVP; bridge pieces later |
-
-Print scale stays **`scale(5)`** on export. With **20 mm per height step**, model-space step ≈ **`4.0`** units before scale (`20 mm / 5`).
-
-## Tile schema (YAML) — MVP shape
+## Tileset schema (as built)
 
 One file per tileset, e.g. [`tilesets/default.yaml`](../../tilesets/default.yaml):
 
 ```yaml
 meta:
-  height_step_mm: 20
+  height_step_mm: 15
+  level_count: 4
   scale: 5
-  hex_outer_width: 5.1961525  # or derived from existing constant
+  hex_outer_width: 5.1961525
+  min_standable_hexes: 1
 
-preview_map:  # MVP: explicit flower placements
+preview_map:
   - { id: flat_plains, at: [0, 0], rot: 0 }
-  - { id: hill_north, at: [1, 0], rot: 2 }
-  # ...
+  - { id: hill_peak, at: [-1, 1], rot: 0 }
 
 flowers:
   flat_plains:
-    hexes:  # indices 0=center, 1-6 ring CCW
-      "0": { terrain: ground, role: standable }
-      "1": { terrain: ground, role: standable }
-      # ...
-    edges:  # 18 exterior edges keyed by stable id (hex_index, side_index)
-      "1-0": { profile: flat_ground }
-      "1-1": { profile: flat_ground }
-      # ...
-    roads:
-      - { entry_junction: 0, exit_junction: 4 }  # maps to today's index pairs
+    hexes:  # indices 0=center, 1-6 ring
+      "0": { height_level: 0 }
+      # ... 1-6
+    side_corner_heights:  # one 4-corner sequence per physical side, 0-5
+      0: [0, 0, 0, 0]
+      # ... 1-5
+    seed: 1
+    roads: []
     water: []
 
-  hill_north:
+  hill_peak:
     hexes:
-      "0": { terrain: middle, role: slope }
-      "3": { terrain: high, role: standable }
+      "3": { height_level: 3 }
       # ...
-    edges:
-      "3-0": { profile: slope_up_ground_to_middle }
+    side_corner_heights:
+      1: [1, 1, 3, 3]  # deliberate cliff, no intermediate slope step
       # ...
+    seed: 7
 ```
 
-**Validation rules (generator must fail fast):**
+**Validation rules (enforced at load time):**
 
-- ≥1 hex with `role: standable`
-- Every `edges` key resolves to a real exterior side
-- `preview_map` connections: adjacent flowers’ touching edges have **compatible profiles**
-- Road/water junction indices ∈ [0, 5]
+- Every hex index 0–6 present, height level in range
+- A side's last corner equals the next side's first corner (same-flower junction consistency — the same physical point)
+- Road/water junction indices ∈ [0, 5], entry ≠ exit
+- Grid-adjacent `rot=0` `preview_map` placements declare reversed-matching `side_corner_heights` on their facing sides
 
-**Edge profile catalog (initial set):**
+**No edge-profile catalog** — matching is exact numeric equality of the 4-corner sequence (once oriented correctly), not a compatibility table.
 
-- `flat_ground`, `flat_middle`, `flat_high`
-- `slope_up_*`, `slope_down_*` between adjacent levels (for exterior transition geometry)
-- `cliff_*` (impassable vertical; height discontinuity)
-- `road_port` / `water_port` modifiers or tagged combinations for later bridge tiles
+## Library choices
 
-Compatibility = symmetric pairs (e.g. `flat_middle` ↔ `flat_middle`, `slope_up_ground_to_middle` ↔ `slope_down_middle_to_ground`).
+| Need | Choice | Why |
+|---|---|---|
+| Mesh representation + STL export | `trimesh` | `is_watertight`/`is_winding_consistent`/`volume`/STL export in one place |
+| Triangulation (cell grooves, road regions, base-plate floor) | `mapbox_earcut` | Ear-clipping preserves every input polygon edge exactly — needed once fine boundary subdivision made unconstrained Delaunay unreliable on collinear/highly-symmetric point sets (see the full build log for the specific failures this fixed) |
+| Deterministic jagged-contour + interior noise | Hand-written integer hash-based value noise (splitmix64-style, no trig) | Bit-exact reproducibility across machines/processes/Python versions rules out libm-based noise and Python's salted built-in `hash()` |
 
-## Geometry approach (MVP)
+## Sample content (as shipped)
 
-1. **Refactor** [`printableFiles/hexagon.py`](../../printableFiles/hexagon.py) into a small package, e.g. `terrain/`:
-   - `layout.py` — flower hex positions/vertices (extract existing math)
-   - `mesh.py` — build per-hex prism/slab at terrain Z + blend slopes between neighbors inside same flower
-   - `edges.py` — exterior profile → bevel/magnet/cliff mesh along side lines
-   - `features.py` — road/water cutters (port existing bezier logic, Z from host hex)
-   - `tileset.py` — load YAML, validate, dispatch build
-   - `cli.py` — `render flower <id>`, `render preview <tileset>`
-
-2. **Per-hex solid**: subdivided hex polygon extruded to `terrain_z`, top face flat for `standable`, chamfered or sloped to neighbors for `slope` (non-standable interior transitions).
-
-3. **Exterior edges**: use profile to set vertical face height vs neighbor flower expectation (MVP: neighbor heights come only from `preview_map`, not auto-solver).
-
-4. **Output**: per-flower SCAD/STL + one **combined** SCAD translating each flower instance (reuse today’s `save_as_scad` pipeline).
-
-## Sample content (MVP deliverables)
-
-| Tile ID | Purpose |
+| Flower ID | Purpose |
 |---------|---------|
-| `flat_plains` | All ground, ≥1 standable, optional road (parity with today) |
-| `hill_north` | Directional rise: mixed hex heights, slopes on non-standable cells, ≥1 high standable pad |
-| `river_grove` | Water channels at `terrain - 1 step`, road optional, no bridge yet |
+| `flat_plains` | Uniform height 0 everywhere — simplest smoke-test case |
+| `hill_peak` | A deliberate cliff on one side (no intermediate slope step) and no standable hex under default parameters — demonstrates decisions #7 and #11 together |
 
-**Manual `preview_map`**: 3–5 flowers arranged so at least one edge tests profile matching (flat meets slope, hill meets plain).
+`preview_map` places both, `hill_peak` at the one grid delta where its side actually matches `flat_plains`'s (both all-zero on that side).
 
-## Milestone 2 (explicitly out of MVP)
+## Success criteria (met)
 
-- **Auto-map generator**: place every flower in tileset at least once; backtracking/CSP on edge profiles; output `generated_preview_map` + combined mesh.
-- **Bridge / deck toppings**: magnet-mounted pieces; dual standable layers on one hex (under + on deck).
-- **Water + road combo** tiles and bridge definitions in YAML.
+- Edit YAML → regenerate flowers + a combined preview STL without touching generator code.
+- Sides expose plain corner-height sequences; the validator rejects illegal `preview_map` adjacency and same-flower junction inconsistency.
+- `render flower <id>` and `render preview` both produce a real, watertight, positive-volume STL, gated by `terrain/export.py` before any file is written.
+- Full pytest suite (57 tests as of Phase 7) asserts against real constructed geometry throughout, with zero references to the discarded CSG modules.
 
-## Risks / print notes
+## Known, deliberately-flagged gaps (not hidden)
 
-- **2 cm steps** → single flower may be **~4 cm tall** ground-to-high; verify printer Z height and overhangs on slopes (may need gentler slope angle or split prints later).
-- Boolean road/water cuts at height remain heavy (today’s SCAD is huge); keep `resolution` configurable per command (`preview` vs `print`).
+- `HexDef.height_level` is validated but not yet consumed by the mesh pipeline (only `side_corner_heights` and `seed` affect geometry) — wiring it in was attempted and reverted once, since anchoring a hex's interior noise to its own declared level risks the exact corner-Z-mismatch bug class the boundary code was carefully built to avoid, for any two neighbor hexes with *different* declared levels.
+- Magnet bore geometry is deferred — base plate wall panels are currently solid (holeless); a true blind recess needs real wall thickness (offset inner/outer faces), a separate follow-up task. `terrain/base_plate.py` already validates `plate_depth` has room for the magnet, and `terrain.triangulate.earcut_triangulate_with_holes()` is in place as a working primitive for whoever picks this up.
+- Default relief parameters (`jitter_amplitude=0.3`, `interior_relief_mm=6.0`) are large enough relative to the standability flatness tolerance (1.0mm) that even a uniform-height flower has 0 standable hexes under *default* build parameters — decision #11 explicitly permits 0, but it's worth knowing this is the common case at default settings, not just the deliberate `hill_peak` case.
 
-## Success criteria for MVP
+## Explicitly out of scope
 
-- Edit YAML → regenerate 3 sample flowers + combined preview SCAD without hand-editing Python indices.
-- Exterior edges expose profile names; validator rejects illegal `preview_map` adjacency.
-- At least one standable pad per flower; visible 2 cm height steps at print scale.
-
-## Implementation todos
-
-- [ ] Define tileset YAML schema + edge profile catalog + validation rules
-- [ ] Refactor hexagon.py into terrain/ package (layout, mesh, edges, features, tileset loader)
-- [ ] Implement 3-level terrain Z (4 model units/step) + per-hex standable/slope roles
-- [ ] Map 18 exterior sides to profiles; generate matching bevel/cliff geometry + compatibility check
-- [ ] Port road/water cutters to per-hex terrain Z from YAML
-- [ ] Add default tileset with flat_plains, hill_north, river_grove + manual preview_map
-- [ ] CLI: render combined preview SCAD from preview_map
-- [ ] *(Later)* CSP map generator placing all flowers with legal edge adjacency
+- Auto-map CSP generator
+- Bridge/deck magnet toppings and dual-layer standable hexes
+- Road + river combo on one corner
+- Single-hex prints, web UI, game rules engine

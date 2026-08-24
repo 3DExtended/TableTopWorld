@@ -1,17 +1,24 @@
-"""Load and validate tileset YAML."""
+"""Load and validate tileset YAML - explicit-mesh schema.
+
+Replaces the old named-edge-profile-catalog schema: a flower's boundary
+is no longer authored as a profile name per exterior edge, but as a
+discrete height level per hex cell plus a 4-corner height sequence per
+side (design decisions #2-#6). Two flowers may only share a side if the
+numbers match according to the reversed-declaration contract (a side k
+of one flower always meets side (k+3)%6 of its neighbor, in reversed
+corner order - verified in terrain/layout.py and terrain/heightfield.py).
+"""
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from terrain.catalog import EdgeProfileCatalog
-from terrain.constants import ROLES, TERRAIN_LEVELS, TERRAIN_Z
-from terrain.layout import FlowerLayout, axial_to_xy
+from terrain.heights import HeightLevels
+from terrain.layout import FlowerLayout
 
 
 class TilesetError(Exception):
@@ -20,18 +27,17 @@ class TilesetError(Exception):
 
 @dataclass
 class HexDef:
-    terrain: str
-    role: str
+    height_level: int
 
 
 @dataclass
 class FlowerDef:
     id: str
     hexes: dict[str, HexDef]
-    edges: dict[str, str]  # edge_key -> profile name
-    roads: list[tuple[int, int]]  # (entry_junction, exit_junction)
-    water: list[tuple[int, int]]
-    topping_hexes: list[int] = field(default_factory=lambda: [1, 2])
+    side_corner_heights: dict[int, tuple[int, int, int, int]]
+    seed: int
+    roads: list[tuple[int, int]] = field(default_factory=list)
+    water: list[tuple[int, int]] = field(default_factory=list)
 
 
 @dataclass
@@ -44,12 +50,14 @@ class PreviewPlacement:
 @dataclass
 class TilesetMeta:
     height_step_mm: float
+    level_count: int
     scale: float
     hex_outer_width: float
+    min_standable_hexes: int
 
     @property
-    def model_step(self) -> float:
-        return self.height_step_mm / self.scale
+    def heights(self) -> HeightLevels:
+        return HeightLevels(mm_per_level=self.height_step_mm, level_count=self.level_count)
 
 
 @dataclass
@@ -60,15 +68,19 @@ class Tileset:
     path: Path | None = None
 
     def layout(self) -> FlowerLayout:
-        return FlowerLayout(self.meta.hex_outer_width)
-
-    def terrain_z(self, level: str) -> float:
-        if level not in TERRAIN_Z:
-            raise TilesetError(f"unknown terrain level {level!r}")
-        return TERRAIN_Z[level]
-
-    def water_z(self, host_level: str) -> float:
-        return self.terrain_z(host_level) - self.meta.model_step
+        """hex_outer_width x scale, not hex_outer_width alone - decision
+        #12: DEFAULT_HEX_OUTER_WIDTH is a small abstract model unit, only
+        physically sized once multiplied by meta.scale. Height (via
+        meta.heights.z(), height_step_mm) is already authored directly in
+        real mm and needs no such multiplier - only the XY footprint does.
+        `scale` was previously parsed and validated by _parse_meta() but
+        never actually consumed anywhere in the pipeline (the same class
+        of gap as HexDef.height_level, flagged separately) - without this,
+        a flower's footprint (~20 model units across) would be smaller
+        than its own possible height variation (up to height_step_mm x
+        (level_count-1), in real mm), an implausible sliver of a shape.
+        """
+        return FlowerLayout(self.meta.hex_outer_width * self.meta.scale)
 
 
 def load_tileset(path: str | Path) -> Tileset:
@@ -76,90 +88,97 @@ def load_tileset(path: str | Path) -> Tileset:
     raw = yaml.safe_load(p.read_text())
     if not isinstance(raw, dict):
         raise TilesetError(f"{p}: expected mapping at root")
-    meta = _parse_meta(raw.get("meta") or {}, p)
-    catalog = EdgeProfileCatalog()
+    meta = _parse_meta(raw.get("meta") or {})
     layout = FlowerLayout(meta.hex_outer_width)
     flowers_raw = raw.get("flowers") or {}
     if not flowers_raw:
         raise TilesetError(f"{p}: flowers section is required")
     flowers: dict[str, FlowerDef] = {}
     for fid, fdata in flowers_raw.items():
-        flowers[fid] = _parse_flower(fid, fdata, layout, catalog, p)
+        flowers[fid] = _parse_flower(fid, fdata, meta.heights, p)
     preview = _parse_preview_map(raw.get("preview_map") or [], flowers, p)
     tileset = Tileset(meta=meta, flowers=flowers, preview_map=preview, path=p)
-    validate_tileset(tileset, catalog, layout)
+    validate_tileset(tileset, layout)
     return tileset
 
 
-def _parse_meta(data: dict[str, Any], path: Path) -> TilesetMeta:
+def _parse_meta(data: dict[str, Any]) -> TilesetMeta:
     return TilesetMeta(
-        height_step_mm=float(data.get("height_step_mm", 20)),
+        height_step_mm=float(data.get("height_step_mm", 15.0)),
+        level_count=int(data.get("level_count", 4)),
         scale=float(data.get("scale", 5)),
         hex_outer_width=float(data.get("hex_outer_width", 5.1961525)),
+        min_standable_hexes=int(data.get("min_standable_hexes", 1)),
     )
 
 
 def _parse_flower(
-    fid: str,
-    data: dict[str, Any],
-    layout: FlowerLayout,
-    catalog: EdgeProfileCatalog,
-    path: Path,
+    fid: str, data: dict[str, Any], heights: HeightLevels, path: Path
 ) -> FlowerDef:
     if not isinstance(data, dict):
         raise TilesetError(f"{path}: flower {fid!r} must be a mapping")
+
     hexes_raw = data.get("hexes") or {}
     hexes: dict[str, HexDef] = {}
-    for idx in range(7):
+    for idx in range(FlowerLayout.HEX_CELL_COUNT):
         key = str(idx)
         h = hexes_raw.get(key)
         if h is None:
             raise TilesetError(f"{path}: flower {fid!r} missing hex {key}")
-        terrain = h.get("terrain")
-        role = h.get("role")
-        if terrain not in TERRAIN_LEVELS:
-            raise TilesetError(
-                f"{path}: flower {fid!r} hex {key}: terrain must be one of {TERRAIN_LEVELS}"
-            )
-        if role not in ROLES:
-            raise TilesetError(
-                f"{path}: flower {fid!r} hex {key}: role must be one of {ROLES}"
-            )
-        hexes[key] = HexDef(terrain=terrain, role=role)
+        level = h.get("height_level") if isinstance(h, dict) else h
+        _validate_level(level, heights, f"flower {fid!r} hex {key}", path)
+        hexes[key] = HexDef(height_level=int(level))
 
-    edges_raw = data.get("edges") or {}
-    edges: dict[str, str] = {}
-    valid_keys = set(layout.exterior_edge_keys())
-    for ekey, edata in edges_raw.items():
-        if ekey not in valid_keys:
+    sides_raw = data.get("side_corner_heights") or {}
+    side_corner_heights: dict[int, tuple[int, int, int, int]] = {}
+    for side_idx in range(FlowerLayout.SIDE_COUNT):
+        values = sides_raw.get(side_idx, sides_raw.get(str(side_idx)))
+        if values is None:
             raise TilesetError(
-                f"{path}: flower {fid!r} edge {ekey!r} is not a valid exterior side "
-                f"(expected one of {sorted(valid_keys)})"
+                f"{path}: flower {fid!r} missing side_corner_heights for side {side_idx}"
             )
-        profile = edata.get("profile") if isinstance(edata, dict) else edata
-        try:
-            catalog.validate_profile_name(profile)
-        except ValueError as exc:
-            raise TilesetError(f"{path}: flower {fid!r} edge {ekey!r}: {exc}") from exc
-        edges[ekey] = profile
+        if not isinstance(values, (list, tuple)) or len(values) != 4:
+            raise TilesetError(
+                f"{path}: flower {fid!r} side {side_idx} must have exactly 4 "
+                f"corner heights, got {values!r}"
+            )
+        for v in values:
+            _validate_level(v, heights, f"flower {fid!r} side {side_idx}", path)
+        side_corner_heights[side_idx] = tuple(int(v) for v in values)
 
-    missing = valid_keys - set(edges.keys())
-    if missing:
-        raise TilesetError(
-            f"{path}: flower {fid!r} missing edge definitions for {sorted(missing)}"
-        )
+    for side_idx in range(FlowerLayout.SIDE_COUNT):
+        this_side = side_corner_heights[side_idx]
+        next_side = side_corner_heights[(side_idx + 1) % FlowerLayout.SIDE_COUNT]
+        if this_side[3] != next_side[0]:
+            raise TilesetError(
+                f"{path}: flower {fid!r} side {side_idx}'s last corner "
+                f"({this_side[3]}) must equal side {(side_idx + 1) % 6}'s "
+                f"first corner ({next_side[0]}) - they are the same "
+                "physical junction"
+            )
+
+    seed = data.get("seed")
+    if not isinstance(seed, int):
+        raise TilesetError(f"{path}: flower {fid!r} requires an integer seed")
 
     roads = _parse_junction_paths(data.get("roads") or [], "roads", fid, path)
     water = _parse_junction_paths(data.get("water") or [], "water", fid, path)
-    topping = data.get("topping_hexes", [1, 2])
     return FlowerDef(
         id=fid,
         hexes=hexes,
-        edges=edges,
+        side_corner_heights=side_corner_heights,
+        seed=seed,
         roads=roads,
         water=water,
-        topping_hexes=list(topping),
     )
+
+
+def _validate_level(value: Any, heights: HeightLevels, label: str, path: Path) -> None:
+    if not isinstance(value, int) or value not in range(heights.level_count):
+        raise TilesetError(
+            f"{path}: {label}: height level must be an integer 0..{heights.level_count - 1}, "
+            f"got {value!r}"
+        )
 
 
 def _parse_junction_paths(
@@ -204,66 +223,62 @@ def _parse_preview_map(
     return placements
 
 
-def validate_tileset(
-    tileset: Tileset,
-    catalog: EdgeProfileCatalog | None = None,
-    layout: FlowerLayout | None = None,
-) -> None:
-    catalog = catalog or EdgeProfileCatalog()
+# Flower-grid axial direction deltas, in the same order as
+# FlowerLayout.neighbor_flower_offset()'s side indices 0..5 - verified
+# numerically (see terrain/layout.py::flower_grid_to_xy's docstring) that
+# these are exactly the (q, r) unit steps reproducing each direction.
+_NEIGHBOR_GRID_DELTAS: tuple[tuple[int, int], ...] = (
+    (1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1),
+)
+
+
+def validate_tileset(tileset: Tileset, layout: FlowerLayout | None = None) -> None:
+    """Structural validation, plus preview_map cross-flower side matching
+    (decision #3/#4's reversed-declaration contract) now that
+    flower_grid_to_xy() gives a correct placement convention to check
+    adjacency against - the old axial_to_xy()/flower_center_spacing bug
+    that used to block this is fixed (see terrain/layout.py).
+
+    Deliberately NOT checked here: standability (decision #11 - checked
+    post-generation against the real mesh, see terrain/standability.py).
+
+    The cross-flower check only applies to placements with rot=0 on both
+    sides: a nonzero `rot` visually rotates a flower in the preview but
+    this validation doesn't (yet) remap side indices under rotation, so a
+    rotated flower's side-matching correctness against its neighbors is
+    simply not verified rather than checked against the wrong side index.
+    """
     layout = layout or tileset.layout()
-    step = tileset.meta.model_step
-    for i, level in enumerate(TERRAIN_LEVELS):
-        expected = i * step
-        if TERRAIN_Z[level] != expected:
-            raise TilesetError(
-                f"TERRAIN_Z[{level!r}] is {TERRAIN_Z[level]}, "
-                f"expected {expected} (level_index * model_step)"
-            )
-    for fid, flower in tileset.flowers.items():
-        standable = sum(1 for h in flower.hexes.values() if h.role == "standable")
-        if standable < 1:
-            raise TilesetError(
-                f"flower {fid!r}: requires at least one standable hex, found {standable}"
-            )
-    _validate_preview_adjacency(tileset, catalog, layout)
-
-
-def _validate_preview_adjacency(
-    tileset: Tileset, catalog: EdgeProfileCatalog, layout: FlowerLayout
-) -> None:
-    if len(tileset.preview_map) < 2:
-        return
-    spacing = layout.flower_center_spacing
-    tol = spacing * 0.15
-    instances: list[tuple[str, str, tuple[float, float], tuple[float, float], str]] = []
-    for placement in tileset.preview_map:
-        flower = tileset.flowers[placement.id]
-        origin_xy = axial_to_xy(placement.at[0], placement.at[1], spacing)
-        for edge in layout.exterior_edges():
-            mid, normal, _ = layout.transform_edge_to_world(
-                edge, origin_xy, placement.rot
-            )
-            instances.append(
-                (placement.id, edge.key, mid, normal, flower.edges[edge.key])
-            )
-
-    matched: set[int] = set()
-    for i, a in enumerate(instances):
-        for j, b in enumerate(instances):
-            if j <= i or i in matched or j in matched:
-                continue
-            if a[0] == b[0]:
-                continue
-            dist = math.hypot(a[2][0] - b[2][0], a[2][1] - b[2][1])
-            if dist > tol:
-                continue
-            dot = a[3][0] * b[3][0] + a[3][1] * b[3][1]
-            if dot > -0.5:
-                continue
-            matched.add(i)
-            matched.add(j)
-            if not catalog.is_compatible(a[4], b[4]):
+    if tileset.meta.min_standable_hexes < 0:
+        raise TilesetError("meta.min_standable_hexes must be >= 0")
+    for flower in tileset.flowers.values():
+        for road_or_water in (*flower.roads, *flower.water):
+            entry, exit_ = road_or_water
+            if entry == exit_:
                 raise TilesetError(
-                    f"preview_map adjacency incompatible: {a[0]!r} edge {a[1]!r} "
-                    f"({a[4]!r}) meets {b[0]!r} edge {b[1]!r} ({b[4]!r})"
+                    f"flower {flower.id!r}: road/water entry and exit junction "
+                    f"must differ, got {entry}"
+                )
+
+    by_position = {p.at: p for p in tileset.preview_map}
+    for placement in tileset.preview_map:
+        if placement.rot != 0:
+            continue
+        flower = tileset.flowers[placement.id]
+        q, r = placement.at
+        for k, (dq, dr) in enumerate(_NEIGHBOR_GRID_DELTAS):
+            neighbor_placement = by_position.get((q + dq, r + dr))
+            if neighbor_placement is None or neighbor_placement.rot != 0:
+                continue
+            neighbor = tileset.flowers[neighbor_placement.id]
+            this_side = flower.side_corner_heights[k]
+            neighbor_side = neighbor.side_corner_heights[(k + 3) % FlowerLayout.SIDE_COUNT]
+            if this_side != tuple(reversed(neighbor_side)):
+                raise TilesetError(
+                    f"preview_map: flower {flower.id!r} at {placement.at} side "
+                    f"{k} ({this_side}) does not match flower "
+                    f"{neighbor.id!r} at {neighbor_placement.at} side "
+                    f"{(k + 3) % FlowerLayout.SIDE_COUNT} reversed "
+                    f"({tuple(reversed(neighbor_side))}) - these are the same "
+                    "physical shared boundary"
                 )

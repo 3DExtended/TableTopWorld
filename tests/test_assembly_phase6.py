@@ -1,0 +1,105 @@
+"""Phase 6: base plate + full assembly, welded into one printable solid.
+
+Verifies the actual constructed geometry (watertight/winding/volume, plus
+the base-plate weld itself), not just that the functions run without
+raising.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from terrain.assembly import build_flower_mesh, standability_report
+from terrain.base_plate import build_base_plate_parts
+from terrain.constants import BASE_PLATE_DEPTH, MAGNET_CENTER_Z, MAGNET_RADIUS
+from terrain.tileset import load_tileset
+
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT = ROOT / "tilesets" / "default.yaml"
+
+
+@pytest.fixture(scope="module")
+def tileset():
+    return load_tileset(DEFAULT)
+
+
+@pytest.mark.parametrize("flower_id", ["flat_plains", "hill_peak"])
+def test_full_flower_is_watertight_and_positive_volume(tileset, flower_id: str) -> None:
+    mesh = build_flower_mesh(tileset, flower_id)
+    assert mesh.is_watertight
+    assert mesh.is_winding_consistent
+    assert mesh.volume > 0
+
+
+def test_center_hex_is_not_a_low_poly_fan(tileset) -> None:
+    """Regression test: internal (hex-to-hex) edges used to be a single
+    raw corner-to-corner segment with no subdivision at all - only the
+    flower's own exterior boundary got fine detail. The center hex cell
+    (index 0) has ALL 6 of its edges internal, so it rendered as a
+    literal 6-triangle flat fan regardless of subdivisions_per_edge - a
+    real "too low poly" look a human immediately noticed. Internal edges
+    now get the same subdivisions_per_edge granularity as the exterior
+    boundary. This checks the *whole* flower's triangle count scales
+    with subdivisions_per_edge accordingly, well above what the old
+    unsubdivided-interior code could ever produce (872 faces for
+    flat_plains at subdivisions_per_edge=8, before this fix)."""
+    mesh = build_flower_mesh(tileset, "flat_plains", subdivisions_per_edge=8)
+    assert len(mesh.faces) > 900
+
+    finer = build_flower_mesh(tileset, "flat_plains", subdivisions_per_edge=16)
+    assert len(finer.faces) > len(mesh.faces)
+
+
+def test_zero_standable_hexes_is_permitted(tileset) -> None:
+    """decision #11: a flower may validly have 0 standable hexes - the
+    hill_peak fixture (a deliberate cliff on every side) is exactly that
+    case, and standability_report must report it rather than raise."""
+    mesh = build_flower_mesh(tileset, "hill_peak")
+    ok, count, min_required = standability_report(mesh, tileset)
+    assert count == 0
+    assert min_required == 1
+    assert ok is False
+
+
+def test_flat_plains_center_hex_is_standable(tileset) -> None:
+    """decision #11's positive case: with relief/jitter turned off, a
+    flower with uniform declared heights is genuinely flat and standable.
+
+    Not built with default jitter_amplitude/interior_relief_mm: those
+    (0.3 * 15mm one_level_z = 4.5mm jitter swing, 6mm interior relief
+    amplitude) apply unconditionally to every hex's boundary and interior
+    corners regardless of declared height (decision #5 - interior relief
+    is deliberately independent of the boundary contract), and both
+    exceed flatness_tolerance_mm's default of 1.0mm on their own. Under
+    those defaults even flat_plains legitimately has 0 standable hexes -
+    that's not a bug, just a stronger statement than this test needs to
+    make. This test isolates the specific claim decision #11 requires: a
+    uniform-height flower CAN be standable, once nothing is sculpting it
+    away from flat.
+    """
+    mesh = build_flower_mesh(
+        tileset, "flat_plains", jitter_amplitude=0.0, interior_relief_mm=0.0
+    )
+    ok, count, _ = standability_report(mesh, tileset)
+    assert count >= 1
+    assert ok is True
+
+
+def test_base_plate_rejects_too_shallow_plate_for_the_magnet() -> None:
+    with pytest.raises(ValueError, match="plate_depth"):
+        build_base_plate_parts(
+            [],
+            [],
+            None,  # type: ignore[arg-type]
+            subdivisions_per_edge=8,
+            bottom_z=0.0,
+            plate_depth=MAGNET_CENTER_Z,  # too shallow: no room for the radius
+            magnet_center_z=MAGNET_CENTER_Z,
+            magnet_radius=MAGNET_RADIUS,
+        )
+
+
+def test_base_plate_default_depth_fits_the_magnet() -> None:
+    assert BASE_PLATE_DEPTH > MAGNET_CENTER_Z + MAGNET_RADIUS

@@ -42,13 +42,6 @@ def convert_outer_hexagon_size_to_inner(outer_hexagon_size: float) -> float:
     return math.sqrt(inner_x**2 + inner_y**2)
 
 
-def axial_to_xy(q: int, r: int, spacing: float) -> Point2D:
-    """Axial hex coords to world XY (pointy-top)."""
-    x = spacing * (math.sqrt(3) * q + math.sqrt(3) / 2 * r)
-    y = spacing * (1.5 * r)
-    return (x, y)
-
-
 def rotate_point_2d(point: Point2D, degrees: float) -> Point2D:
     rad = math.radians(degrees)
     c, s = math.cos(rad), math.sin(rad)
@@ -83,11 +76,14 @@ class FlowerLayout:
     EDGES_PER_HEX = 6
     EXTERIOR_SIDES_PER_HEX = 3
     JUNCTION_COUNT = 6
+    # A "side" is the boundary run shared with one potential neighbor flower:
+    # 3 consecutive exterior edges spanning 2 ring hexes, 4 corner vertices.
+    SIDE_COUNT = 6
+    EDGES_PER_SIDE = 3
 
     def __init__(self, hex_outer_width: float = 5.1961525) -> None:
         self.hex_outer_width = hex_outer_width
         self.inner_hexagon_size = convert_outer_hexagon_size_to_inner(hex_outer_width)
-        self.flower_center_spacing = self.inner_hexagon_size * 4.0
         self._cell_centers: dict[int, Point2D] = {0: (0.0, 0.0)}
         self._cell_polygons: dict[int, list[Point2D]] = {}
         self._ring_vertices: list[list[Point2D]] = []
@@ -228,6 +224,157 @@ class FlowerLayout:
                     )
                 )
         return edges
+
+    # The 6 canonical flower-to-flower neighbor directions, expressed as
+    # small-hex axial offsets (q, s). Derived from one verified 3-shared-edge
+    # offset, (3, -1), rotated by the axial 60-degree rotation formula
+    # (q, s) -> (-s, q + s). Brute-force verified (grill session) to be the
+    # maximum possible shared-edge count between two validly-tiled neighbor
+    # flowers: 3 edges / 4 corners, never 1 or more than 3.
+    #
+    # An earlier, wrong placement convention (a generic pointy-top
+    # axial_to_xy()/flower_center_spacing formula) did NOT correspond to
+    # true edge-sharing adjacency (confirmed numerically at the time) -
+    # removed once flower_grid_to_xy() (below) was verified as the correct
+    # replacement, used by terrain/assembly.py for preview_map placement.
+    NEIGHBOR_SMALL_HEX_OFFSETS: tuple[tuple[int, int], ...] = (
+        (3, -1), (1, 2), (-2, 3), (-3, 1), (-1, -2), (2, -3),
+    )
+
+    def _small_hex_basis_vector(self, k: int) -> Point2D:
+        """World direction of one single-hex-to-hex step k (0..5), matching
+        _ring_center's own angle convention (60*k + 30 degrees) so this stays
+        consistent with the rest of this class's actual hex arrangement."""
+        angle_rad = math.radians(60 * k + 30)
+        r = self.hex_outer_width
+        return (r * math.sqrt(3) * math.cos(angle_rad), r * math.sqrt(3) * math.sin(angle_rad))
+
+    def neighbor_flower_offset(self, direction_idx: int) -> Point2D:
+        """World XY center offset to place a TRUE edge-sharing neighbor flower.
+
+        direction_idx 0..5 selects one of the 6 canonical neighbor directions
+        (60 degrees apart). No rotation is needed for the placed flower - see
+        design decision #2. Expressed as q*e0 + s*e1 where e0/e1 are the
+        single-hex-step basis vectors for steps 0 and 1 (this class's own
+        angle convention, NOT a generic pointy-top axial formula).
+        """
+        if direction_idx not in range(6):
+            raise ValueError(f"direction {direction_idx} must be 0..5")
+        q, s = self.NEIGHBOR_SMALL_HEX_OFFSETS[direction_idx]
+        e0 = self._small_hex_basis_vector(0)
+        e1 = self._small_hex_basis_vector(1)
+        return (q * e0[0] + s * e1[0], q * e0[1] + s * e1[1])
+
+    def flower_grid_to_xy(self, q: int, r: int) -> Point2D:
+        """World XY center for a flower placed at flower-grid axial
+        coordinates (q, r) - the correct replacement for the old, wrong
+        axial_to_xy()/flower_center_spacing (see the NOTE above
+        NEIGHBOR_SMALL_HEX_OFFSETS: that pairing does not correspond to
+        true edge-sharing adjacency at all).
+
+        Standard axial hex coordinates: q*e0 + r*e1, where e0/e1 are
+        neighbor_flower_offset(0)/(1) - verified numerically that this
+        exactly reproduces all 6 neighbor_flower_offset(k) directions at
+        the expected small-integer (q, r) combinations
+        ((1,0), (0,1), (-1,1), (-1,0), (0,-1), (1,-1) for k=0..5), so it
+        generalizes correctly to any flower placement, not just direct
+        neighbors.
+        """
+        e0 = self.neighbor_flower_offset(0)
+        e1 = self.neighbor_flower_offset(1)
+        return (q * e0[0] + r * e1[0], q * e0[1] + r * e1[1])
+
+    def _side_groups(self) -> list[list[ExteriorEdge]]:
+        """Group the 18 exterior edges into 6 boundary sides.
+
+        Each side is 3 edges (spanning 2 ring hexes: 2 edges of one + 1 of
+        its ring-neighbor, or vice versa) shared with one potential neighbor
+        flower. A naive "sort 18 edges by angle, chunk into runs of 3"
+        actually groups each *ring hex's own* 3 edges together instead
+        (verified against neighbor_flower_offset() - that grouping produces
+        zero true edge-for-edge matches with a real adjacent flower). The
+        correct grouping instead buckets each edge by which of the 6 real
+        neighbor_flower_offset() directions its midpoint angle is closest
+        to, since that's the direction a physically-adjacent flower is
+        actually placed in.
+        """
+        edges = self.exterior_edges()
+
+        def edge_angle(e: ExteriorEdge) -> float:
+            (x1, y1), (x2, y2) = e.line_2d
+            mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+            return math.atan2(my, mx)
+
+        def angular_diff(a: float, b: float) -> float:
+            d = abs(a - b) % (2 * math.pi)
+            return min(d, 2 * math.pi - d)
+
+        direction_angles = [
+            math.atan2(*reversed(self.neighbor_flower_offset(k)))
+            for k in range(self.SIDE_COUNT)
+        ]
+
+        buckets: list[list[ExteriorEdge]] = [[] for _ in range(self.SIDE_COUNT)]
+        for e in edges:
+            ea = edge_angle(e)
+            best_k = min(
+                range(self.SIDE_COUNT),
+                key=lambda k: angular_diff(ea, direction_angles[k]),
+            )
+            buckets[best_k].append(e)
+
+        def signed_diff(a: float, b: float) -> float:
+            """a - b, wrapped into (-pi, pi] - avoids +-180 degree sort bugs
+            that a plain angle sort would hit near the wraparound point."""
+            return (a - b + math.pi) % (2 * math.pi) - math.pi
+
+        for k, bucket in enumerate(buckets):
+            if len(bucket) != self.EDGES_PER_SIDE:
+                raise RuntimeError(
+                    f"side {k}: expected {self.EDGES_PER_SIDE} edges, "
+                    f"got {len(bucket)} ({[e.key for e in bucket]})"
+                )
+            center = direction_angles[k]
+            bucket.sort(key=lambda e: signed_diff(edge_angle(e), center))
+        return buckets
+
+    @staticmethod
+    def side_id(side_idx: int) -> str:
+        return f"side-{side_idx}"
+
+    def side_corners(
+        self, side_idx: int
+    ) -> tuple[Point2D, Point2D, Point2D, Point2D]:
+        """The 4 corner points of one of the flower's 6 sides, in boundary order.
+
+        Two flowers may only share a side if their declared corner heights
+        match in this same order (see design decision #3).
+        """
+        if side_idx not in range(self.SIDE_COUNT):
+            raise ValueError(f"side {side_idx} must be 0..{self.SIDE_COUNT - 1}")
+        chain_edges = self._side_groups()[side_idx]
+
+        def close(a: Point2D, b: Point2D, tol: float = 1e-6) -> bool:
+            return math.hypot(a[0] - b[0], a[1] - b[1]) < tol
+
+        points = [chain_edges[0].line_2d[0], chain_edges[0].line_2d[1]]
+        for e in chain_edges[1:]:
+            p1, p2 = e.line_2d
+            if close(p1, points[-1]):
+                points.append(p2)
+            elif close(p2, points[-1]):
+                points.append(p1)
+            else:
+                raise RuntimeError(
+                    f"side {side_idx}: edge {e.key} does not chain from "
+                    f"previous corner {points[-1]}"
+                )
+        if len(points) != self.EDGES_PER_SIDE + 1:
+            raise RuntimeError(
+                f"side {side_idx}: expected {self.EDGES_PER_SIDE + 1} corners, "
+                f"got {len(points)}"
+            )
+        return (points[0], points[1], points[2], points[3])
 
     def junction_lines(self, junction_idx: int) -> tuple[Line2D, Line2D, Line2D]:
         """Three hex-side lines meeting at junction (port of getOuterHexFlowerLines)."""

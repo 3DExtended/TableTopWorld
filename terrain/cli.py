@@ -1,4 +1,7 @@
-"""CLI: render flower or preview assembly to SCAD."""
+"""Command-line entry point - written fresh for the explicit-mesh redesign
+(the old terrain/cli.py, CSG-based, was deleted in Phase 4 along with the
+rest of the discarded pipeline; see the project plan's Phase 4 note).
+"""
 
 from __future__ import annotations
 
@@ -6,120 +9,120 @@ import argparse
 import sys
 from pathlib import Path
 
-from solid2 import set_global_fa, set_global_fn, set_global_fs
-
-from terrain.assembly import AssemblyExporter
-from terrain.render.format import format_render_spec
+from terrain.assembly import build_flower_mesh, build_preview_mesh, standability_report
+from terrain.export import MeshValidationError, export_stl
 from terrain.tileset import TilesetError, load_tileset
 
-DEFAULT_TILESET = Path(__file__).resolve().parent.parent / "tilesets" / "default.yaml"
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 
-
-def _configure_resolution(mode: str) -> int:
-    if mode == "print":
-        resolution = 100
-    else:
-        resolution = 32
-    set_global_fn(resolution)
-    set_global_fa(resolution)
-    set_global_fs(resolution)
-    return resolution
-
-
-def _export_scad(solid, path: Path, scale: float) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    solid.scale(scale).save_as_scad(str(path))
-    print(f"wrote {path}")
-
-
-def cmd_render_flower(args: argparse.Namespace) -> int:
-    tileset_path = Path(args.tileset)
-    resolution = _configure_resolution(args.resolution)
+def _cmd_render_flower(args: argparse.Namespace) -> int:
     try:
-        tileset = load_tileset(tileset_path)
+        tileset = load_tileset(args.tileset)
     except TilesetError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    exporter = AssemblyExporter(tileset, resolution=resolution)
-    solid = exporter.build_flower(args.flower_id)
-    out = Path(args.output) if args.output else OUTPUT_DIR / f"{args.flower_id}.scad"
-    _export_scad(solid, out, tileset.meta.scale)
+
+    if args.flower_id not in tileset.flowers:
+        print(
+            f"error: flower {args.flower_id!r} not found in {args.tileset} "
+            f"(available: {', '.join(sorted(tileset.flowers))})",
+            file=sys.stderr,
+        )
+        return 1
+
+    mesh = build_flower_mesh(
+        tileset, args.flower_id, subdivisions_per_edge=args.subdivisions_per_edge
+    )
+    ok, count, min_required = standability_report(mesh, tileset)
+    print(
+        f"flower {args.flower_id!r}: {count}/7 hex cells standable "
+        f"(minimum {min_required}, {'OK' if ok else 'BELOW MINIMUM'})"
+    )
+
+    try:
+        out_path = export_stl(mesh, args.output)
+    except MeshValidationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"wrote {out_path}")
     return 0
 
 
-def cmd_render_spec_flower(args: argparse.Namespace) -> int:
-    tileset_path = Path(args.tileset)
+def _cmd_render_preview(args: argparse.Namespace) -> int:
     try:
-        tileset = load_tileset(tileset_path)
+        tileset = load_tileset(args.tileset)
     except TilesetError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    exporter = AssemblyExporter(tileset, resolution=32)
-    spec = exporter.describe_flower(args.flower_id)
-    text = format_render_spec(spec)
-    out = Path(args.output) if args.output else OUTPUT_DIR / f"{args.flower_id}.render.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(text)
-    print(f"wrote {out}")
-    return 0
 
+    if not tileset.preview_map:
+        print(f"error: {args.tileset} has an empty preview_map", file=sys.stderr)
+        return 1
 
-def cmd_render_preview(args: argparse.Namespace) -> int:
-    tileset_path = Path(args.tileset)
-    resolution = _configure_resolution(args.resolution)
+    mesh = build_preview_mesh(tileset, subdivisions_per_edge=args.subdivisions_per_edge)
+    print(f"preview: {len(tileset.preview_map)} flower(s) placed")
+
     try:
-        tileset = load_tileset(tileset_path)
-    except TilesetError as exc:
+        out_path = export_stl(mesh, args.output)
+    except MeshValidationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    exporter = AssemblyExporter(tileset, resolution=resolution)
-    solid = exporter.build_preview()
-    out = Path(args.output) if args.output else OUTPUT_DIR / "preview.scad"
-    _export_scad(solid, out, tileset.meta.scale)
+
+    print(f"wrote {out_path}")
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="terrain", description="Hex-flower terrain SCAD export")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(prog="terrain")
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    render = sub.add_parser("render", help="Export SCAD")
-    render_sub = render.add_subparsers(dest="render_target", required=True)
+    render = subparsers.add_parser("render", help="render one flower to STL")
+    render_sub = render.add_subparsers(dest="target", required=True)
 
-    flower = render_sub.add_parser("flower", help="Single flower by id")
-    flower.add_argument("flower_id", help="Flower id from tileset")
+    flower = render_sub.add_parser("flower", help="render a single flower")
+    flower.add_argument("flower_id", help="flower id as declared in the tileset")
     flower.add_argument(
         "--tileset",
-        default=str(DEFAULT_TILESET),
-        help="Path to tileset YAML",
+        type=Path,
+        default=Path("tilesets/default.yaml"),
+        help="path to the tileset YAML (default: tilesets/default.yaml)",
     )
     flower.add_argument(
-        "--resolution",
-        choices=("preview", "print"),
-        default="preview",
-        help="Mesh resolution (preview=32, print=100)",
+        "--output",
+        type=Path,
+        default=Path("output/flower.stl"),
+        help="output STL path (default: output/flower.stl)",
     )
-    flower.add_argument("--output", "-o", help="Output .scad path")
-    flower.set_defaults(func=cmd_render_flower)
+    flower.add_argument(
+        "--subdivisions-per-edge",
+        type=int,
+        default=8,
+        help="mesh detail along each hex edge, higher = smoother/more triangles (default: 8)",
+    )
+    flower.set_defaults(func=_cmd_render_flower)
 
-    preview = render_sub.add_parser("preview", help="Combined preview_map assembly")
-    preview.add_argument("--tileset", default=str(DEFAULT_TILESET))
+    preview = render_sub.add_parser(
+        "preview", help="render the tileset's whole preview_map as one assembled scene"
+    )
     preview.add_argument(
-        "--resolution",
-        choices=("preview", "print"),
-        default="preview",
+        "--tileset",
+        type=Path,
+        default=Path("tilesets/default.yaml"),
+        help="path to the tileset YAML (default: tilesets/default.yaml)",
     )
-    preview.add_argument("--output", "-o")
-    preview.set_defaults(func=cmd_render_preview)
-
-    spec = render_sub.add_parser("spec", help="Text render spec for a flower (for tests)")
-    spec_flower = spec.add_subparsers(dest="spec_target", required=True)
-    spec_one = spec_flower.add_parser("flower", help="Single flower render spec")
-    spec_one.add_argument("flower_id", help="Flower id from tileset")
-    spec_one.add_argument("--tileset", default=str(DEFAULT_TILESET))
-    spec_one.add_argument("--output", "-o", help="Output .json path")
-    spec_one.set_defaults(func=cmd_render_spec_flower)
+    preview.add_argument(
+        "--output",
+        type=Path,
+        default=Path("output/preview.stl"),
+        help="output STL path (default: output/preview.stl)",
+    )
+    preview.add_argument(
+        "--subdivisions-per-edge",
+        type=int,
+        default=8,
+        help="mesh detail along each hex edge, higher = smoother/more triangles (default: 8)",
+    )
+    preview.set_defaults(func=_cmd_render_preview)
 
     return parser
 

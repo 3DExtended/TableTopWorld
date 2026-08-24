@@ -1,69 +1,130 @@
-"""Assemble multiple flowers from preview_map."""
+"""Whole-flower assembly: terrain surface + base plate, welded into one solid.
+
+Written fresh for the explicit-mesh redesign - the old terrain/assembly.py
+(CSG-based) was deleted in Phase 4 along with the rest of the discarded
+pipeline (see the project plan's Phase 4 note).
+"""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import numpy as np
+import trimesh
 
-from solid2 import union
-
-from terrain.catalog import EdgeProfileCatalog
-from terrain.edges import EdgeGeometry
-from terrain.features import FeatureCutters
-from terrain.layout import axial_to_xy
-from terrain.mesh import FlowerMeshBuilder
-from terrain.render.planner import plan_flower
-from terrain.render.spec import FlowerRenderSpec
-
-if TYPE_CHECKING:
-    from solid2 import OpenSCADObject
-
-    from terrain.tileset import Tileset
+from terrain.base_plate import build_base_plate_parts
+from terrain.constants import (
+    BASE_PLATE_DEPTH,
+    MAGNET_CENTER_Z,
+    MAGNET_RADIUS,
+)
+from terrain.standability import check_min_standable_hexes
+from terrain.surface_mesh import build_flower_open_solid
+from terrain.tileset import Tileset
 
 
-class AssemblyExporter:
-    """Place flowers per preview_map and union for combined export."""
+def build_flower_mesh(
+    tileset: Tileset,
+    flower_id: str,
+    *,
+    subdivisions_per_edge: int = 8,
+    jitter_amplitude: float = 0.05,
+    interior_relief_mm: float = 1.0,
+    include_hex_grooves: bool = True,
+    plate_depth: float = BASE_PLATE_DEPTH,
+    magnet_center_z: float = MAGNET_CENTER_Z,
+    magnet_radius: float = MAGNET_RADIUS,
+) -> trimesh.Trimesh:
+    """Build one flower's complete printable solid: the terrain surface
+    (decisions #1-#10) welded directly to a flat base plate carrying the
+    magnet bores (decision #13), as one Trimesh - no boolean union (see
+    terrain/base_plate.py's own docstring for why, and how the weld
+    actually works: shared vertex indices at the flat bottom rim, not two
+    independently-capped solids glued together).
 
-    def __init__(self, tileset: Tileset, resolution: int = 100) -> None:
-        self.tileset = tileset
-        self.resolution = resolution
-        self.layout = tileset.layout()
-        self.mesh_builder = FlowerMeshBuilder(tileset, self.layout)
-        self.edge_geom = EdgeGeometry(self.layout)
-        self.catalog = EdgeProfileCatalog()
-        self.features = FeatureCutters(self.layout, resolution)
+    A flower's declared roads (tileset.py's FlowerDef.roads) are passed
+    straight through as road_water_side_pairs; only one road per flower is
+    currently supported (surface_mesh.py raises NotImplementedError for
+    more than one), and combining a road with include_hex_grooves on the
+    same flower isn't wired up yet either (same limitation, unchanged from
+    Phase 5).
+    """
+    flower = tileset.flowers[flower_id]
+    layout = tileset.layout()
+    level_z = tileset.meta.heights.z
+    bottom_z = -plate_depth
 
-    def describe_flower(self, flower_id: str) -> FlowerRenderSpec:
-        if flower_id not in self.tileset.flowers:
-            raise KeyError(f"unknown flower {flower_id!r}")
-        return plan_flower(
-            self.tileset,
-            self.tileset.flowers[flower_id],
-            resolution=self.resolution,
-            catalog=self.catalog,
-        )
+    road_water_side_pairs = flower.roads + flower.water
 
-    def build_flower(self, flower_id: str) -> OpenSCADObject:
-        if flower_id not in self.tileset.flowers:
-            raise KeyError(f"unknown flower {flower_id!r}")
-        flower = self.tileset.flowers[flower_id]
-        solid = self.mesh_builder.build_flower(flower)
-        hex_top_z = lambda idx: self.mesh_builder.hex_mesh_top_z(flower, idx)
-        solid = self.edge_geom.apply_bevels(solid, hex_top_z)
-        solid = self.features.apply_features(solid, flower, self.tileset)
-        solid = self.edge_geom.apply_magnets(solid, flower, self.catalog)
-        return solid
+    vertices, faces, bottom_rim_indices = build_flower_open_solid(
+        flower.side_corner_heights,
+        layout,
+        level_z,
+        flower.seed,
+        bottom_z=bottom_z,
+        subdivisions_per_edge=subdivisions_per_edge,
+        jitter_amplitude=jitter_amplitude,
+        interior_relief_mm=interior_relief_mm,
+        include_hex_grooves=include_hex_grooves and not road_water_side_pairs,
+        road_water_side_pairs=road_water_side_pairs,
+    )
 
-    def _place(self, solid: OpenSCADObject, q: int, r: int, rot: int) -> OpenSCADObject:
-        spacing = self.layout.flower_center_spacing
-        x, y = axial_to_xy(q, r, spacing)
-        return solid.rotateZ(rot * 60).translateX(x).translateY(y)
+    extra_vertices, plate_faces = build_base_plate_parts(
+        vertices,
+        bottom_rim_indices,
+        layout,
+        subdivisions_per_edge=subdivisions_per_edge,
+        bottom_z=bottom_z,
+        plate_depth=plate_depth,
+        magnet_center_z=magnet_center_z,
+        magnet_radius=magnet_radius,
+    )
 
-    def build_preview(self) -> OpenSCADObject:
-        parts = []
-        for placement in self.tileset.preview_map:
-            part = self.build_flower(placement.id)
-            part = self._place(part, placement.at[0], placement.at[1], placement.rot)
-            parts.append(part)
-        if not parts:
-            raise ValueError("preview_map is empty")
-        return union()(parts)
+    all_vertices = vertices + extra_vertices
+    all_faces = faces + plate_faces
+
+    return trimesh.Trimesh(
+        vertices=np.array(all_vertices), faces=np.array(all_faces), process=True
+    )
+
+
+def standability_report(
+    mesh: trimesh.Trimesh, tileset: Tileset
+) -> tuple[bool, int, int]:
+    """(meets_minimum, actual_standable_count, min_required)."""
+    layout = tileset.layout()
+    ok, count = check_min_standable_hexes(
+        mesh, layout, tileset.meta.min_standable_hexes
+    )
+    return ok, count, tileset.meta.min_standable_hexes
+
+
+def build_preview_mesh(tileset: Tileset, **build_kwargs) -> trimesh.Trimesh:
+    """Every flower in tileset.meta's preview_map, each built standalone
+    via build_flower_mesh() and placed at its correct world position via
+    FlowerLayout.flower_grid_to_xy() (the fix for the placement bug
+    flagged since Phase 1 - the old axial_to_xy()/flower_center_spacing
+    did not correspond to true edge-sharing adjacency).
+
+    This is a preview SCENE, not one continuously-welded solid: each
+    flower is its own separate, independently-watertight print (they mate
+    physically via magnets, not shared mesh topology), simply translated
+    into the position it would occupy on the table. A placement's `rot`
+    is applied as a rigid rotation about the flower's own center for
+    visual variety - tileset.py's validate_tileset() only verifies the
+    reversed-declaration side contract for rot=0 placements, so a rotated
+    flower's fit against its neighbors isn't guaranteed correct here.
+    """
+    layout = tileset.layout()
+    parts: list[trimesh.Trimesh] = []
+    for placement in tileset.preview_map:
+        mesh = build_flower_mesh(tileset, placement.id, **build_kwargs)
+        if placement.rot:
+            mesh = mesh.copy()
+            mesh.apply_transform(
+                trimesh.transformations.rotation_matrix(
+                    placement.rot * (np.pi / 3), [0, 0, 1]
+                )
+            )
+        x, y = layout.flower_grid_to_xy(*placement.at)
+        mesh.apply_translation((x, y, 0.0))
+        parts.append(mesh)
+    return trimesh.util.concatenate(parts)
