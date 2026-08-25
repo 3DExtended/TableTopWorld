@@ -73,6 +73,7 @@ def _build_flower_top_and_walls(
     include_hex_grooves: bool,
     groove_depth_mm: float,
     groove_width_mm: float,
+    groove_profile: list[tuple[float, float]] | None = None,
     road_water_side_pairs: Sequence[tuple[int, int]],
     road_subdivisions: int,
 ) -> tuple[
@@ -135,6 +136,7 @@ def _build_flower_top_and_walls(
             interior_relief_mm=interior_relief_mm,
             groove_depth_mm=groove_depth_mm,
             groove_width_mm=groove_width_mm,
+            groove_profile=groove_profile,
         )
         boundary_count = len(boundary_indices)
         final_points_2d = [(x, y) for x, y, _ in final_vertices_3d]
@@ -189,6 +191,7 @@ def build_flower_surface_mesh(
     include_hex_grooves: bool = False,
     groove_depth_mm: float = 0.0,
     groove_width_mm: float = 2.0,
+    groove_profile: list[tuple[float, float]] | None = None,
     road_water_side_pairs: Sequence[tuple[int, int]] = (),
     road_subdivisions: int = 10,
 ) -> trimesh.Trimesh:
@@ -236,6 +239,7 @@ def build_flower_surface_mesh(
         include_hex_grooves=include_hex_grooves,
         groove_depth_mm=groove_depth_mm,
         groove_width_mm=groove_width_mm,
+        groove_profile=groove_profile,
         road_water_side_pairs=road_water_side_pairs,
         road_subdivisions=road_subdivisions,
     )
@@ -262,6 +266,7 @@ def build_flower_open_solid(
     include_hex_grooves: bool = False,
     groove_depth_mm: float = 0.0,
     groove_width_mm: float = 2.0,
+    groove_profile: list[tuple[float, float]] | None = None,
     road_water_side_pairs: Sequence[tuple[int, int]] = (),
     road_subdivisions: int = 10,
 ) -> tuple[list[tuple[float, float, float]], list[tuple[int, int, int]], list[int]]:
@@ -291,6 +296,7 @@ def build_flower_open_solid(
         include_hex_grooves=include_hex_grooves,
         groove_depth_mm=groove_depth_mm,
         groove_width_mm=groove_width_mm,
+        groove_profile=groove_profile,
         road_water_side_pairs=road_water_side_pairs,
         road_subdivisions=road_subdivisions,
     )

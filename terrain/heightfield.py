@@ -249,6 +249,7 @@ def build_flower_cells(
     interior_relief_mm: float = 6.0,
     groove_depth_mm: float = 0.0,
     groove_width_mm: float = 2.0,
+    groove_profile: list[tuple[float, float]] | None = None,
 ) -> tuple[list[Vertex3D], list[Vertex3D], list[Triangle]]:
     """Triangulate each of the flower's 7 hex cells INDEPENDENTLY, as its
     own simple hexagon, instead of one Delaunay pass over the whole
@@ -460,6 +461,19 @@ def build_flower_cells(
         canonical_registry[key] = v
         return v
 
+    # An earlier round tried lowering a hex-to-hex corner's own shared
+    # vertex (used by up to 3 cells' grooves AND the surrounding regular
+    # terrain) to avoid each groove climbing back to a fixed peak there.
+    # That fix numerically resolved the peak but visually produced a worse
+    # artifact: dipping ONE vertex shared by 3 independently-triangulated
+    # cells' ordinary (non-groove) terrain created a small sinkhole, each
+    # cell interpolating toward it from a different direction. The groove
+    # ring is now built as an exact scale-toward-apex transform (see the
+    # groove-ring comment below) that reaches full depth at every ring
+    # point, corners included, without needing the true corner vertex
+    # itself touched - so that hack is gone; the true corner vertex stays
+    # exactly as declared, exterior and interior alike.
+
     # Cache of internal (hex-to-hex) edges' own subdivided point lists,
     # keyed by the edge's two rounded endpoint positions (order-
     # independent), so both cells that border a given edge get the exact
@@ -467,6 +481,15 @@ def build_flower_cells(
     # resolving every point through canonical_point - equivalent, but
     # avoids the registry-lookup cost per shared edge twice over.
     internal_edge_cache: dict[frozenset[tuple[float, float]], list[Vertex3D]] = {}
+
+    # The skirt's sunken shared-edge vertices, keyed by the ORIGINAL point's
+    # rounded (x, y). A hex-to-hex edge is walked once by each of the two
+    # cells that border it (in opposite directions), and both must end up
+    # referencing the literal same lowered vertex - first caller computes
+    # and stores it, the other reuses it - rather than two independently
+    # computed values that merely ought to be equal. Same discipline, and
+    # the same reason, as canonical_registry above.
+    sunken_edge_registry: dict[tuple[float, float], Vertex3D] = {}
 
     def internal_edge_points(p1: Point2D, p2: Point2D) -> list[Vertex3D]:
         key1 = (round(p1[0], 3), round(p1[1], 3))
@@ -519,13 +542,55 @@ def build_flower_cells(
         cx, cy = layout.cell_center(hex_idx)
         apex = (cx, cy, interior_z(cx, cy))
 
+        # Perpendicular distance from this cell's own center to one of its
+        # (ideal, unjittered) edges - a regular hexagon's apothem. Computed
+        # once per cell, from layout's raw geometry rather than any
+        # particular wedge's own (possibly xy-jittered) far_edge, so every
+        # wedge scales its groove ring by the exact same factor - see the
+        # groove-ring comment below for why that single shared factor is
+        # what keeps ring corners exact instead of needing a taper.
+        _ideal_p1, _ideal_p2 = layout.hex_edge_line(hex_idx, 0)
+        _adx, _ady = _ideal_p2[0] - _ideal_p1[0], _ideal_p2[1] - _ideal_p1[1]
+        _alen = math.hypot(_adx, _ady)
+        apothem = (
+            abs(_adx * (cy - _ideal_p1[1]) - _ady * (cx - _ideal_p1[0])) / _alen
+            if _alen > 1e-9
+            else 0.0
+        )
+
+        # Skirt sizing, computed once per cell. _skirt_scale is the central-
+        # scaling factor mapping this cell's true edge onto the inset "rim"
+        # line where the skirt has climbed back to full terrain height;
+        # _skirt_depth is how far the shared edge itself is sunk below it.
+        _effective_profile = groove_profile
+        if _effective_profile is None and groove_depth_mm > 0.0:
+            _effective_profile = [(1.0, -groove_depth_mm)]
+        _has_groove = bool(_effective_profile) and groove_width_mm > 0.0 and apothem > 1e-9
+        _skirt_scale = 1.0
+        _skirt_depth = 0.0
+        if _has_groove:
+            _skirt_width_frac, _skirt_z_off = _effective_profile[-1]
+            _skirt_scale = 1.0 - (groove_width_mm * _skirt_width_frac) / apothem
+            _skirt_depth = abs(_skirt_z_off)
+
         # spokes[edge_idx]: n+1 points from apex (index 0) to corner_i
         # (index n, = edge_pts[edge_idx][0], the SAME object). Shared
         # between the two wedges that meet at that corner (wedge edge_idx
         # and wedge (edge_idx-1)%6) - computed once per cell, not once
         # per wedge, the same shared-vertex-object discipline as
         # everywhere else in this module.
+        #
+        # rim_spokes[edge_idx]: the same, but stopping at the skirt's inner
+        # rim (apex + (corner-apex) * _skirt_scale) rather than the true
+        # corner. The coarse interior grid uses THESE as its boundary, so
+        # it hands off to the skirt exactly where the skirt begins; the
+        # skirt strip alone owns everything between the rim and the sunken
+        # edge. Two adjacent wedges of the same cell derive this from the
+        # same apex/scale/corner, so they land on the identical point with
+        # no stitching needed. Without a skirt _skirt_scale is 1.0 and this
+        # is bit-identical to spokes.
         spokes: list[list[Vertex3D]] = []
+        rim_spokes: list[list[Vertex3D]] = []
         for edge_idx in range(FlowerLayout.EDGES_PER_HEX):
             corner = edge_pts[edge_idx][0]
             dx, dy = corner[0] - apex[0], corner[1] - apex[1]
@@ -537,6 +602,26 @@ def build_flower_cells(
                 spoke.append((x, y, interior_z(x, y)))
             spoke.append(corner)
             spokes.append(spoke)
+
+            if _has_groove:
+                rim_spoke = [apex]
+                for step in range(1, n):
+                    t = step / n
+                    x = apex[0] + dx * _skirt_scale * t
+                    y = apex[1] + dy * _skirt_scale * t
+                    rim_spoke.append((x, y, interior_z(x, y)))
+                rx = apex[0] + dx * _skirt_scale
+                ry = apex[1] + dy * _skirt_scale
+                # Full, undisturbed terrain height: the rim is where the
+                # skirt has finished climbing, so it must agree with the
+                # coarse grid it borders (which is interior_z everywhere).
+                # Must stay bit-identical to what the strip's own rim row
+                # computes at j=0/n - both scale the same `corner` by the
+                # same factor and call interior_z on the result.
+                rim_spoke.append((rx, ry, interior_z(rx, ry)))
+                rim_spokes.append(rim_spoke)
+            else:
+                rim_spokes.append(spoke)
 
         vertex_index: dict[Vertex3D, int] = {}
 
@@ -559,26 +644,10 @@ def build_flower_cells(
             far_edge = edge_pts[edge_idx]
             spoke_i = spokes[edge_idx]
             spoke_j = spokes[(edge_idx + 1) % FlowerLayout.EDGES_PER_HEX]
+            rim_spoke_i = rim_spokes[edge_idx]
+            rim_spoke_j = rim_spokes[(edge_idx + 1) % FlowerLayout.EDGES_PER_HEX]
             grid_cache: dict[tuple[int, int], Vertex3D] = {}
 
-            # The groove is a dedicated thin strip of NEW geometry between
-            # the true edge (far_edge, untouched - still the literal shared
-            # vertex the flower's boundary contract / the neighboring cell
-            # across an internal edge rely on) and an "inset" row pulled
-            # groove_width_mm toward the apex, at full undisturbed height -
-            # the coarse interior grid attaches to THIS inset row instead
-            # of the true edge, so the depression is confined to a strip of
-            # exactly groove_width_mm regardless of subdivisions_per_edge,
-            # not smeared across however much of the interior grid happens
-            # to fall within groove_width_mm of the edge (the previous
-            # approach - which could vanish entirely if one grid step was
-            # already wider than groove_width_mm, an invisible-groove bug
-            # caught by directly measuring the real scaled output before
-            # shipping).  The offset/depth both taper to exactly 0 at each
-            # of the wedge's 2 corners (window below), so the strip's own
-            # corner points degenerate to the corner itself - already a
-            # shared vertex via spokes - rather than needing new stitching
-            # logic where 3 wedges' worth of strips would otherwise meet.
             # far_edge[0] and far_edge[n] are this wedge's OWN raw corner
             # computations (this side's independent noise sample at that
             # position) - for an internal, same-hex wedge corner they're
@@ -603,55 +672,126 @@ def build_flower_cells(
                 return far_edge[j]
 
             inset_line = far_edge
-            if groove_depth_mm > 0.0 and groove_width_mm > 0.0:
-                ci, cj = far_edge_at(0), far_edge_at(n)
-                edge_dx, edge_dy = cj[0] - ci[0], cj[1] - ci[1]
-                edge_len = math.hypot(edge_dx, edge_dy)
-                if edge_len > 1e-9:
-                    nx, ny = -edge_dy / edge_len, edge_dx / edge_len
-                    if nx * (apex[0] - ci[0]) + ny * (apex[1] - ci[1]) < 0:
-                        nx, ny = -nx, -ny
-                    margin = 1.0 / n
-                    computed_inset: list[Vertex3D] = []
-                    for j in range(n + 1):
-                        t = j / n
-                        window = min(1.0, min(t, 1.0 - t) / margin)
-                        if window <= 0.0:
-                            # Exactly at a wedge corner: reuse the corner's
-                            # own vertex object (spokes[...][n] / far_edge's
-                            # own endpoint) rather than recomputing an
-                            # approximately-equal point via interior_z - a
-                            # different formula than however this corner's
-                            # real Z was established (the boundary contract
-                            # or an internal edge), so a recomputed copy
-                            # would not be bit-identical and would leave a
-                            # hairline crack instead of degenerating cleanly
-                            # into the existing shared vertex.
-                            computed_inset.append(far_edge_at(j))
-                            continue
-                        ex, ey, _ = far_edge[j]
-                        ix = ex + nx * groove_width_mm * window
-                        iy = ey + ny * groove_width_mm * window
-                        iz = interior_z(ix, iy) - groove_depth_mm * window
-                        computed_inset.append((ix, iy, iz))
-                    inset_line = computed_inset
+            if _has_groove:
+                # THE SKIRT. Each hex cell's surface slopes DOWN as it
+                # approaches a shared hex-to-hex edge, and the shared edge
+                # itself is the low line - so two neighbouring cells form
+                # one single V between them.
+                #
+                # The previous design left the shared edge at full terrain
+                # height and sank a channel just inside it, on each side
+                # independently. Because BOTH cells did that, the untouched
+                # shared edge was left standing as a thin wall between two
+                # channels: measured on a real flat_plains build, a
+                # cross-section straight across one hex-to-hex edge read
+                # 0.0 / -0.6 / 0.0 / -0.6 / 0.0 over about 4mm - a 0.6mm
+                # tall knife-edge blade running the full length of every
+                # hex boundary. A human reported it repeatedly as a "spike"
+                # (and, viewed end-on, that is exactly what it looks like)
+                # and asked for a skirt instead: "i dont want a groove that
+                # goes up down up again."
+                #
+                # Two rows per wedge, then, not a channel:
+                #   edge row - the true edge's own shared vertices, sunk by
+                #              _skirt_depth (see sunken_edge_registry: the
+                #              neighbouring cell reuses these exact lowered
+                #              vertices, so the two skirts meet in one V
+                #              rather than each owning a separate floor).
+                #   rim row  - _skirt_scale inward, back at full terrain
+                #              height, where the coarse interior grid takes
+                #              over (grid_point uses rim_spoke_i/j to match).
+                #
+                # EVERY hex edge is sunk by the same _skirt_depth, with no
+                # taper anywhere - exterior (flower silhouette) edges
+                # included. A single hex therefore reads as "/" on all six
+                # of its sides (flat across the face, dropping to -depth
+                # exactly at the edge), and the V only appears once two
+                # hexes are put together, each contributing one half. That
+                # is the shape asked for: "i want the V to form only after
+                # connecting two hexagons together. so a single hex should
+                # have a '/' instead of the 'V'."
+                #
+                # Sinking the silhouette does NOT break the cross-flower
+                # boundary contract (decision #4). The contract requires
+                # that two flowers meeting along a side compute the same
+                # physical contour, and both derive it from the same
+                # deterministic build_side_boundary_vertices output; both
+                # then subtract the same constant _skirt_depth from it, so
+                # the two contours stay bit-identical. It is also what
+                # makes joined flowers behave like joined hexes: their two
+                # half-skirts meet to form the same V any interior hex
+                # boundary has, instead of the seam being the one hex
+                # boundary on the whole piece with no engraved line.
+                # A taper back to full height at the 18 declared corners
+                # was tried and dropped: it matches between flowers too,
+                # but it pinches the V shut at every corner, scalloping
+                # each edge instead of leaving one clean constant-depth
+                # line.
+                def sunken_edge_at(j: int) -> Vertex3D:
+                    v = far_edge_at(j)
+                    key = (round(v[0], 3), round(v[1], 3))
+                    existing = sunken_edge_registry.get(key)
+                    if existing is not None:
+                        return existing
+                    sunk = (v[0], v[1], v[2] - _skirt_depth)
+                    sunken_edge_registry[key] = sunk
+                    return sunk
+
+                def rim_at(j: int) -> Vertex3D:
+                    # Central scaling toward the apex: a constant factor
+                    # maps the straight true edge onto an exactly parallel
+                    # line a constant distance inside it, endpoints
+                    # included - so the two wedges meeting at a corner
+                    # scale that shared corner by the same factor and land
+                    # on the same rim point with no stitching. At j=0/n
+                    # this reproduces rim_spoke_i[n]/rim_spoke_j[n]
+                    # bit-for-bit (same expression, same inputs).
+                    ex, ey, _ = far_edge_at(j)
+                    ix = apex[0] + (ex - apex[0]) * _skirt_scale
+                    iy = apex[1] + (ey - apex[1]) * _skirt_scale
+                    return (ix, iy, interior_z(ix, iy))
+
+                edge_row = [sunken_edge_at(j) for j in range(n + 1)]
+                rim_row = [rim_at(j) for j in range(n + 1)]
+                for j in range(n):
+                    a = local_index(edge_row[j])
+                    b = local_index(edge_row[j + 1])
+                    c = local_index(rim_row[j])
+                    d = local_index(rim_row[j + 1])
+                    for tri in ((a, b, c), (b, d, c)):
+                        if len(set(tri)) == 3:
+                            all_triangles.append(
+                                (tri[0] + offset, tri[1] + offset, tri[2] + offset)
+                            )
+                inset_line = rim_row
 
             def grid_point(I: int, J: int) -> Vertex3D:
+                # Uses rim_spoke_i/rim_spoke_j, not spoke_i/spoke_j: with a
+                # skirt, the coarse interior fill's own outer boundary is
+                # the skirt's inner RIM, and the skirt strip alone owns
+                # everything from there out to the sunken edge. This is
+                # also what keeps the sunken shared edge from dragging the
+                # ordinary terrain down with it - the true corner where
+                # three cells meet is a skirt vertex only, never a corner
+                # of any cell's interior grid, so lowering it cannot pull
+                # three independently-triangulated interiors into a
+                # sinkhole (an artifact an earlier round hit and a human
+                # rejected). Without a skirt, rim_spoke_i/j ARE spoke_i/j.
                 cached = grid_cache.get((I, J))
                 if cached is not None:
                     return cached
                 if J == 0:
-                    v = spoke_i[I]
+                    v = rim_spoke_i[I]
                 elif I == 0:
-                    v = spoke_j[J]
+                    v = rim_spoke_j[J]
                 elif I + J == n:
                     v = inset_line[J]
                 else:
-                    x = apex[0] + (spoke_i[n][0] - apex[0]) * (I / n) + (
-                        spoke_j[n][0] - apex[0]
+                    x = apex[0] + (rim_spoke_i[n][0] - apex[0]) * (I / n) + (
+                        rim_spoke_j[n][0] - apex[0]
                     ) * (J / n)
-                    y = apex[1] + (spoke_i[n][1] - apex[1]) * (I / n) + (
-                        spoke_j[n][1] - apex[1]
+                    y = apex[1] + (rim_spoke_i[n][1] - apex[1]) * (I / n) + (
+                        rim_spoke_j[n][1] - apex[1]
                     ) * (J / n)
                     v = (x, y, interior_z(x, y))
                 grid_cache[(I, J)] = v
@@ -667,22 +807,21 @@ def build_flower_cells(
                         p4 = local_index(grid_point(I + 1, J + 1))
                         all_triangles.append((p2 + offset, p4 + offset, p3 + offset))
 
-            if inset_line is not far_edge:
-                for j in range(n):
-                    a = local_index(far_edge_at(j))
-                    b = local_index(far_edge_at(j + 1))
-                    c = local_index(inset_line[j])
-                    d = local_index(inset_line[j + 1])
-                    for tri in ((a, b, c), (b, d, c)):
-                        if len(set(tri)) == 3:
-                            all_triangles.append(
-                                (tri[0] + offset, tri[1] + offset, tri[2] + offset)
-                            )
-
         for edge_idx in exterior_edges:
             side_idx, start = exterior_fine_meta[hex_idx][edge_idx]
             for i, v in enumerate(edge_pts[edge_idx][:-1]):
-                side_position_to_global_index[(side_idx, start + i)] = offset + vertex_index[v]
+                # The vertex actually IN the mesh at this boundary position
+                # is the sunken one once a skirt exists (the silhouette is
+                # skirted like any other hex edge, so joined flowers form
+                # the same V two joined hexes do). The walls and base plate
+                # consume these indices, so they must reference the sunken
+                # vertex - not the pre-sink value, which no cell ever
+                # emitted. Falls back to v when there is no skirt.
+                key = (round(v[0], 3), round(v[1], 3))
+                mesh_v = sunken_edge_registry.get(key, v)
+                side_position_to_global_index[(side_idx, start + i)] = (
+                    offset + vertex_index[mesh_v]
+                )
 
     boundary_indices = [
         side_position_to_global_index[(side_idx, abs_pos)]
