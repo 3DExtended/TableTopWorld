@@ -12,24 +12,42 @@ this check needs to catch.
 
 from __future__ import annotations
 
+import math
+
 import trimesh
 
+from terrain.heightfield import PLATEAU_AREA_FRAC
 from terrain.layout import FlowerLayout
 
 
-def hex_cell_z_range(mesh: trimesh.Trimesh, layout: FlowerLayout, hex_idx: int) -> float:
-    """Max - min Z among the mesh's own top-surface vertices that fall
-    within hex cell `hex_idx`'s 2D footprint - 0.0 for a perfectly flat
-    cell, larger for a sloped or cliffed one."""
+def hex_cell_z_range(
+    mesh: trimesh.Trimesh,
+    layout: FlowerLayout,
+    hex_idx: int,
+    *,
+    region_frac: float = PLATEAU_AREA_FRAC,
+) -> float:
+    """Max - min Z among the mesh's own top-surface vertices inside hex
+    cell `hex_idx`'s PLATEAU - 0.0 for a perfectly flat plateau, larger
+    for a sloped or cliffed one.
+
+    Deliberately measures the plateau (`region_frac` of the cell's area,
+    the concentric sub-hexagon build_flower_cells holds flat and noise-
+    free at the cell's declared height_level) rather than the whole cell.
+    A cell's outer band exists precisely to absorb the height difference
+    to its neighbours, so including it would report every cell adjacent
+    to any step as unstandable - which is what used to happen: at
+    production defaults EVERY hex of BOTH fixture flowers measured as
+    unstandable, so min_standable_hexes could never be satisfied. Peter's
+    requirement is "the hex does not need to be flat everywhere, but at
+    least 2/3 should be flat" - so 2/3 of the area is exactly what gets
+    measured.
+    """
     polygon = layout.ring_vertices(hex_idx)
     cx, cy = layout.cell_center(hex_idx)
-    # A hex cell's own corners are themselves the most informative points
-    # (shared boundary between this cell and its neighbors) but sit
-    # exactly ON the polygon boundary, where ray-casting point_in_polygon
-    # is not reliable (an exact vertex/edge hit can go either way).
-    # Inflate slightly around the cell center before testing containment
-    # so the cell's own corners always land unambiguously inside.
-    inflated = [(cx + (x - cx) * 1.001, cy + (y - cy) * 1.001) for x, y in polygon]
+    # Scaling a hexagon about its centre by k scales its area by k^2.
+    k = math.sqrt(region_frac) if region_frac > 0.0 else 0.0
+    inflated = [(cx + (x - cx) * k, cy + (y - cy) * k) for x, y in polygon]
     xs = [p[0] for p in inflated]
     ys = [p[1] for p in inflated]
     min_x, max_x = min(xs), max(xs)

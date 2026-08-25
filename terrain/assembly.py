@@ -33,6 +33,7 @@ def build_flower_mesh(
     groove_depth_mm: float = 1.5,
     groove_width_mm: float = 6.0,
     groove_profile: list[tuple[float, float]] | None = None,
+    use_hex_plateaus: bool = True,
     plate_depth: float = BASE_PLATE_DEPTH,
     magnet_center_z: float = MAGNET_CENTER_Z,
     magnet_radius: float = MAGNET_RADIUS,
@@ -72,6 +73,11 @@ def build_flower_mesh(
         groove_depth_mm=groove_depth_mm,
         groove_width_mm=groove_width_mm,
         groove_profile=groove_profile,
+        hex_height_levels=(
+            {int(k): h.height_level for k, h in flower.hexes.items()}
+            if use_hex_plateaus
+            else None
+        ),
         road_water_side_pairs=road_water_side_pairs,
     )
 

@@ -20,6 +20,19 @@ Point2D = tuple[float, float]
 Vertex3D = tuple[float, float, float]
 Triangle = tuple[int, int, int]
 
+# Fraction of a hex cell's AREA held perfectly flat and noise-free at the
+# cell's declared height_level - its "plateau", the part a miniature can
+# actually stand on. The remaining area is an outer band that blends the
+# plateau into whatever the cell's shared edges are doing (a neighbouring
+# cell's own plateau, or the flower's declared silhouette contour), so
+# height differences between cells still read as real steps/cliffs.
+#
+# Peter's requirement: "the hex does not need to be flat everywhere, but at
+# least 2/3 should be flat (and without noise too)". Scaling a hexagon
+# about its centre by k scales its area by k^2, so a 2/3-AREA plateau
+# reaches sqrt(2/3) ~= 0.816 of the way from centre to edge.
+PLATEAU_AREA_FRAC = 2.0 / 3.0
+
 
 def build_side_boundary_vertices(
     corner_heights: tuple[int, int, int, int],
@@ -250,6 +263,8 @@ def build_flower_cells(
     groove_depth_mm: float = 0.0,
     groove_width_mm: float = 2.0,
     groove_profile: list[tuple[float, float]] | None = None,
+    hex_height_levels: dict[int, int] | None = None,
+    plateau_area_frac: float = PLATEAU_AREA_FRAC,
 ) -> tuple[list[Vertex3D], list[Vertex3D], list[Triangle]]:
     """Triangulate each of the flower's 7 hex cells INDEPENDENTLY, as its
     own simple hexagon, instead of one Delaunay pass over the whole
@@ -540,7 +555,6 @@ def build_flower_cells(
         # adds triangles radiating from a single point, giving a spiky
         # rather than a genuinely subdivided look).
         cx, cy = layout.cell_center(hex_idx)
-        apex = (cx, cy, interior_z(cx, cy))
 
         # Perpendicular distance from this cell's own center to one of its
         # (ideal, unjittered) edges - a regular hexagon's apothem. Computed
@@ -557,6 +571,61 @@ def build_flower_cells(
             if _alen > 1e-9
             else 0.0
         )
+
+        # --- Plateau shaping (decision #11 / height_level, finally wired up).
+        # hex_radial(p) is p's distance from this cell's centre measured in
+        # units of the cell's own apothem, using the hexagon's own metric
+        # (max over the 6 outward edge normals) rather than a circle - so
+        # hex_radial == 1 exactly on the cell's edges and ~1.155 at its
+        # corners, and a level set of it is a smaller concentric hexagon.
+        _edge_normals: list[tuple[float, float]] = []
+        for _e in range(FlowerLayout.EDGES_PER_HEX):
+            _p1, _p2 = layout.hex_edge_line(hex_idx, _e)
+            _ex, _ey = _p2[0] - _p1[0], _p2[1] - _p1[1]
+            _el = math.hypot(_ex, _ey)
+            if _el <= 1e-9:
+                continue
+            # Outward normal: flip whichever perpendicular points away from
+            # the centre, so this works regardless of edge winding.
+            _nx, _ny = -_ey / _el, _ex / _el
+            if (_p1[0] - cx) * _nx + (_p1[1] - cy) * _ny < 0.0:
+                _nx, _ny = -_nx, -_ny
+            _edge_normals.append((_nx, _ny))
+
+        _plateau_r = math.sqrt(plateau_area_frac) if plateau_area_frac > 0.0 else 0.0
+        _plateau_z: float | None = None
+        if hex_height_levels is not None and hex_idx in hex_height_levels:
+            _plateau_z = level_z(hex_height_levels[hex_idx])
+
+        def hex_radial(x: float, y: float) -> float:
+            if apothem <= 1e-9 or not _edge_normals:
+                return 0.0
+            return max(
+                (x - cx) * nx + (y - cy) * ny for nx, ny in _edge_normals
+            ) / apothem
+
+        def cell_z(x: float, y: float) -> float:
+            """This cell's own surface height: dead flat and noise-free at
+            the declared height_level across the plateau, then blended out
+            to the ordinary interior_z field by the time it reaches the
+            cell's edges. Only ever used for points strictly INSIDE one
+            cell - points shared with a neighbouring cell (edge points,
+            corners) keep going through canonical_point/interior_z, which
+            is what lets two cells at different height_levels still agree
+            exactly on the vertices they share (the disagreement that made
+            an earlier attempt at consuming height_level get reverted)."""
+            if _plateau_z is None:
+                return interior_z(x, y)
+            h = hex_radial(x, y)
+            if h <= _plateau_r:
+                return _plateau_z
+            t = (h - _plateau_r) / max(1.0 - _plateau_r, 1e-9)
+            t = min(1.0, max(0.0, t))
+            # smoothstep: no crease where the blend leaves the plateau
+            t = t * t * (3.0 - 2.0 * t)
+            return _plateau_z + (interior_z(x, y) - _plateau_z) * t
+
+        apex = (cx, cy, cell_z(cx, cy))
 
         # Skirt sizing, computed once per cell. _skirt_scale is the central-
         # scaling factor mapping this cell's true edge onto the inset "rim"
@@ -599,7 +668,7 @@ def build_flower_cells(
                 t = step / n
                 x = apex[0] + dx * t
                 y = apex[1] + dy * t
-                spoke.append((x, y, interior_z(x, y)))
+                spoke.append((x, y, cell_z(x, y)))
             spoke.append(corner)
             spokes.append(spoke)
 
@@ -609,7 +678,7 @@ def build_flower_cells(
                     t = step / n
                     x = apex[0] + dx * _skirt_scale * t
                     y = apex[1] + dy * _skirt_scale * t
-                    rim_spoke.append((x, y, interior_z(x, y)))
+                    rim_spoke.append((x, y, cell_z(x, y)))
                 rx = apex[0] + dx * _skirt_scale
                 ry = apex[1] + dy * _skirt_scale
                 # Full, undisturbed terrain height: the rim is where the
@@ -618,7 +687,7 @@ def build_flower_cells(
                 # Must stay bit-identical to what the strip's own rim row
                 # computes at j=0/n - both scale the same `corner` by the
                 # same factor and call interior_z on the result.
-                rim_spoke.append((rx, ry, interior_z(rx, ry)))
+                rim_spoke.append((rx, ry, cell_z(rx, ry)))
                 rim_spokes.append(rim_spoke)
             else:
                 rim_spokes.append(spoke)
@@ -749,7 +818,7 @@ def build_flower_cells(
                     ex, ey, _ = far_edge_at(j)
                     ix = apex[0] + (ex - apex[0]) * _skirt_scale
                     iy = apex[1] + (ey - apex[1]) * _skirt_scale
-                    return (ix, iy, interior_z(ix, iy))
+                    return (ix, iy, cell_z(ix, iy))
 
                 edge_row = [sunken_edge_at(j) for j in range(n + 1)]
                 rim_row = [rim_at(j) for j in range(n + 1)]
@@ -793,7 +862,7 @@ def build_flower_cells(
                     y = apex[1] + (rim_spoke_i[n][1] - apex[1]) * (I / n) + (
                         rim_spoke_j[n][1] - apex[1]
                     ) * (J / n)
-                    v = (x, y, interior_z(x, y))
+                    v = (x, y, cell_z(x, y))
                 grid_cache[(I, J)] = v
                 return v
 

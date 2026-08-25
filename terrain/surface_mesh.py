@@ -74,6 +74,7 @@ def _build_flower_top_and_walls(
     groove_depth_mm: float,
     groove_width_mm: float,
     groove_profile: list[tuple[float, float]] | None = None,
+    hex_height_levels: dict[int, int] | None = None,
     road_water_side_pairs: Sequence[tuple[int, int]],
     road_subdivisions: int,
 ) -> tuple[
@@ -137,6 +138,7 @@ def _build_flower_top_and_walls(
             groove_depth_mm=groove_depth_mm,
             groove_width_mm=groove_width_mm,
             groove_profile=groove_profile,
+            hex_height_levels=hex_height_levels,
         )
         boundary_count = len(boundary_indices)
         final_points_2d = [(x, y) for x, y, _ in final_vertices_3d]
@@ -192,6 +194,7 @@ def build_flower_surface_mesh(
     groove_depth_mm: float = 0.0,
     groove_width_mm: float = 2.0,
     groove_profile: list[tuple[float, float]] | None = None,
+    hex_height_levels: dict[int, int] | None = None,
     road_water_side_pairs: Sequence[tuple[int, int]] = (),
     road_subdivisions: int = 10,
 ) -> trimesh.Trimesh:
@@ -240,6 +243,7 @@ def build_flower_surface_mesh(
         groove_depth_mm=groove_depth_mm,
         groove_width_mm=groove_width_mm,
         groove_profile=groove_profile,
+        hex_height_levels=hex_height_levels,
         road_water_side_pairs=road_water_side_pairs,
         road_subdivisions=road_subdivisions,
     )
@@ -267,6 +271,7 @@ def build_flower_open_solid(
     groove_depth_mm: float = 0.0,
     groove_width_mm: float = 2.0,
     groove_profile: list[tuple[float, float]] | None = None,
+    hex_height_levels: dict[int, int] | None = None,
     road_water_side_pairs: Sequence[tuple[int, int]] = (),
     road_subdivisions: int = 10,
 ) -> tuple[list[tuple[float, float, float]], list[tuple[int, int, int]], list[int]]:
@@ -297,6 +302,7 @@ def build_flower_open_solid(
         groove_depth_mm=groove_depth_mm,
         groove_width_mm=groove_width_mm,
         groove_profile=groove_profile,
+        hex_height_levels=hex_height_levels,
         road_water_side_pairs=road_water_side_pairs,
         road_subdivisions=road_subdivisions,
     )
