@@ -11,14 +11,54 @@ import numpy as np
 import trimesh
 
 from terrain.base_plate import build_base_plate_parts
+from terrain.boundary_noise import hash_to_unit_interval
 from terrain.constants import (
     BASE_PLATE_DEPTH,
     MAGNET_CENTER_Z,
     MAGNET_RADIUS,
 )
+from terrain.layout import FlowerLayout
 from terrain.standability import check_min_standable_hexes
 from terrain.surface_mesh import build_flower_open_solid
 from terrain.tileset import Tileset
+
+
+def pick_standable_hexes(
+    seed: int,
+    *,
+    min_standable: int,
+    forced_count: int | None = None,
+    hex_count: int = FlowerLayout.HEX_CELL_COUNT,
+) -> list[int]:
+    """Which of a flower's hex cells get a flat, standable plateau.
+
+    How MANY varies per flower rather than being all 7 every time, so a
+    map has a mix of open, buildable flowers and broken/rugged ones. The
+    count is drawn from the flower's own seed in
+    [min_standable, hex_count], so it stays a pure function of authored
+    data - two independent builds of the same flower agree, same as every
+    other seeded choice in this codebase. `forced_count` pins it instead
+    (0 = no plateaus at all, i.e. fully organic terrain).
+
+    Uses boundary_noise's splitmix hash, never Python's built-in hash(),
+    which is salted per process by PYTHONHASHSEED and would silently
+    break that reproducibility.
+    """
+    if forced_count is None:
+        span = hex_count - min_standable
+        count = min_standable + (
+            int(hash_to_unit_interval(seed, 0xF1A7) * (span + 1)) if span > 0 else 0
+        )
+    else:
+        count = forced_count
+    count = max(0, min(hex_count, count))
+    # Deterministic shuffle: order the cells by a per-cell hash, take the
+    # first `count`. Sorted back into index order so callers see a stable,
+    # readable set rather than hash order.
+    ranked = sorted(
+        range(hex_count), key=lambda h: hash_to_unit_interval(seed, 0x5A5A, h)
+    )
+    return sorted(ranked[:count])
 
 
 def build_flower_mesh(
@@ -33,7 +73,7 @@ def build_flower_mesh(
     groove_depth_mm: float = 1.5,
     groove_width_mm: float = 6.0,
     groove_profile: list[tuple[float, float]] | None = None,
-    use_hex_plateaus: bool = True,
+    standable_hexes: int | None = None,
     plate_depth: float = BASE_PLATE_DEPTH,
     magnet_center_z: float = MAGNET_CENTER_Z,
     magnet_radius: float = MAGNET_RADIUS,
@@ -73,11 +113,14 @@ def build_flower_mesh(
         groove_depth_mm=groove_depth_mm,
         groove_width_mm=groove_width_mm,
         groove_profile=groove_profile,
-        hex_height_levels=(
-            {int(k): h.height_level for k, h in flower.hexes.items()}
-            if use_hex_plateaus
-            else None
-        ),
+        hex_height_levels={
+            hex_idx: flower.hexes[str(hex_idx)].height_level
+            for hex_idx in pick_standable_hexes(
+                flower.seed,
+                min_standable=tileset.meta.min_standable_hexes,
+                forced_count=standable_hexes,
+            )
+        },
         road_water_side_pairs=road_water_side_pairs,
     )
 

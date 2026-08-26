@@ -27,11 +27,14 @@ Triangle = tuple[int, int, int]
 # cell's own plateau, or the flower's declared silhouette contour), so
 # height differences between cells still read as real steps/cliffs.
 #
-# Peter's requirement: "the hex does not need to be flat everywhere, but at
-# least 2/3 should be flat (and without noise too)". Scaling a hexagon
-# about its centre by k scales its area by k^2, so a 2/3-AREA plateau
-# reaches sqrt(2/3) ~= 0.816 of the way from centre to edge.
-PLATEAU_AREA_FRAC = 2.0 / 3.0
+# Scaling a hexagon about its centre by k scales its area by k^2, so an
+# f-AREA plateau reaches sqrt(f) of the way from centre to edge.
+#
+# Started at 2/3 ("at least 2/3 should be flat (and without noise too)"),
+# then trimmed on sight of the first real render ("make the flat part a
+# little smaller") - 0.55 of the area, reaching sqrt(0.55) ~= 0.742 out
+# from the centre, leaving a wider band for the terrain to transition in.
+PLATEAU_AREA_FRAC = 0.55
 
 
 def build_side_boundary_vertices(

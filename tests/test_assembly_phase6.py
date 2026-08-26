@@ -11,7 +11,11 @@ from pathlib import Path
 
 import pytest
 
-from terrain.assembly import build_flower_mesh, standability_report
+from terrain.assembly import (
+    build_flower_mesh,
+    pick_standable_hexes,
+    standability_report,
+)
 from terrain.base_plate import build_base_plate_parts
 from terrain.constants import BASE_PLATE_DEPTH, MAGNET_CENTER_Z, MAGNET_RADIUS
 from terrain.layout import FlowerLayout
@@ -54,30 +58,58 @@ def test_center_hex_is_not_a_low_poly_fan(tileset) -> None:
     assert len(finer.faces) > len(mesh.faces)
 
 
-def test_hex_plateaus_make_every_hex_standable(tileset) -> None:
-    """Each hex is built with a flat, noise-free plateau at its declared
-    height_level covering 2/3 of its area, so every hex is standable even
-    on hill_peak (a deliberate cliff on every side) - the cliffs live in
-    the outer band BETWEEN plateaus, not across the part you stand on.
-
-    Before height_level drove geometry, every hex of both fixtures
-    measured as unstandable at production defaults, so min_standable_hexes
-    could never be satisfied by any flower at all."""
+def test_the_generated_mesh_matches_the_standable_hexes_picked(tileset) -> None:
+    """The number of standable hexes varies per flower (drawn from its own
+    seed), and the REAL mesh must agree with that choice - every picked
+    cell measures flat, every unpicked one does not. This is the check
+    that ties the seeded decision to the actual geometry rather than
+    trusting one or the other in isolation."""
+    layout = tileset.layout()
     for flower_id in ("flat_plains", "hill_peak"):
+        flower = tileset.flowers[flower_id]
+        picked = pick_standable_hexes(
+            flower.seed, min_standable=tileset.meta.min_standable_hexes
+        )
         mesh = build_flower_mesh(tileset, flower_id)
         ok, count, min_required = standability_report(mesh, tileset)
-        assert count == FlowerLayout.HEX_CELL_COUNT, flower_id
-        assert min_required == 1
+        assert count == len(picked), flower_id
+        assert count >= min_required, flower_id
         assert ok is True, flower_id
+        for hex_idx in range(FlowerLayout.HEX_CELL_COUNT):
+            z_range = hex_cell_z_range(mesh, layout, hex_idx)
+            if hex_idx in picked:
+                assert z_range == pytest.approx(0.0, abs=1e-6), (flower_id, hex_idx)
+            else:
+                assert z_range > 1.0, (flower_id, hex_idx)
+
+
+def test_standable_hex_count_is_seeded_varied_and_reproducible() -> None:
+    """It must genuinely vary between flowers (not quietly always 7), stay
+    within [min_standable, 7], and be a pure function of the seed - the
+    same reproducibility contract as every other seeded choice here."""
+    counts = {
+        len(pick_standable_hexes(seed, min_standable=1)) for seed in range(1, 40)
+    }
+    assert len(counts) > 1, "count never varies - randomization is not doing anything"
+    assert min(counts) >= 1 and max(counts) <= FlowerLayout.HEX_CELL_COUNT
+
+    for seed in range(1, 10):
+        assert pick_standable_hexes(seed, min_standable=1) == pick_standable_hexes(
+            seed, min_standable=1
+        )
+
+    # the declared minimum is always honoured, even when it is the whole flower
+    for seed in range(1, 10):
+        assert len(pick_standable_hexes(seed, min_standable=7)) == 7
 
 
 def test_zero_standable_hexes_is_permitted(tileset) -> None:
     """decision #11: a flower may validly have 0 standable hexes, and
-    standability_report must report that rather than raise. Exercised
-    with plateaus off (use_hex_plateaus=False), which is the purely
-    organic terrain the generator produced before height_level was wired
-    up - noise and relief alone leave no hex flat within tolerance."""
-    mesh = build_flower_mesh(tileset, "hill_peak", use_hex_plateaus=False)
+    standability_report must report that rather than raise. Exercised by
+    pinning standable_hexes=0, which is the purely organic terrain the
+    generator produced before height_level was wired up - noise and relief
+    alone leave no hex flat within tolerance."""
+    mesh = build_flower_mesh(tileset, "hill_peak", standable_hexes=0)
     ok, count, min_required = standability_report(mesh, tileset)
     assert count == 0
     assert min_required == 1
@@ -86,12 +118,16 @@ def test_zero_standable_hexes_is_permitted(tileset) -> None:
 
 def test_plateau_sits_exactly_at_the_declared_height_level(tileset) -> None:
     """height_level must actually drive geometry (it was parsed and
-    validated but ignored by the mesh pipeline until now), and the
-    plateau must be genuinely flat - not merely flat within tolerance."""
+    validated but ignored by the mesh pipeline until now), and a plateau
+    must be genuinely flat - not merely flat within tolerance."""
     flower = tileset.flowers["hill_peak"]
     layout = tileset.layout()
     mesh = build_flower_mesh(tileset, "hill_peak")
-    for hex_idx in range(FlowerLayout.HEX_CELL_COUNT):
+    picked = pick_standable_hexes(
+        flower.seed, min_standable=tileset.meta.min_standable_hexes
+    )
+    assert picked, "fixture must have at least one plateau for this to test anything"
+    for hex_idx in picked:
         declared = tileset.meta.heights.z(flower.hexes[str(hex_idx)].height_level)
         assert hex_cell_z_range(mesh, layout, hex_idx) == pytest.approx(0.0, abs=1e-6)
         # and it is flat AT the declared level, not just flat somewhere
