@@ -64,6 +64,27 @@ Always run commands with the venv active, or prefix with `.venv/bin/python`.
 .venv/bin/python -m terrain.cli render flower hill_peak --subdivisions-per-edge 8 --output output/flower_hill_peak.stl
 ```
 
+## Print — Bambu Lab project file
+
+With Bambu Studio installed, `scripts/bambu_project.py` turns a folder of
+flower STLs into a sliced project (`.gcode.3mf`) using Bambu Studio's own
+command line: the flowers are arranged two per 256 mm plate, every plate is
+sliced, and plate previews are written next to it. Open the file in Bambu
+Studio and print plate by plate (or change the process or filament there
+and re-slice).
+
+```bash
+# P1S, 0.4 nozzle, 0.20 mm Standard, Generic PLA, textured PEI plate (the defaults)
+.venv/bin/python scripts/bambu_project.py --stl-dir output/hills --output output/hills/hills_P1S.gcode.3mf
+
+# Another printer or filament: any profile name from Bambu Studio's bundled BBL profiles
+.venv/bin/python scripts/bambu_project.py --stl-dir output/hills --output output/hills/hills_A1.gcode.3mf --printer "Bambu Lab A1 0.4 nozzle" --process "0.20mm Standard @BBL A1" --filament "Bambu PLA Basic @BBL A1"
+```
+
+The script flattens the chosen profiles along their `inherits` chain first;
+Bambu Studio's CLI does not do that itself and would otherwise slice for a
+200 mm bed.
+
 Every export is gated by `terrain/export.py`: the mesh must be watertight,
 winding-consistent and of positive volume, or nothing is written. The CLI
 also prints how many of the 7 hexes are standable in the real mesh.
