@@ -19,8 +19,9 @@ cell has a declared height_level; the field between them is:
 * The silhouette is sacred (decision #4): along a flower's 18 exterior
   edges the field is driven to the declared contour - the lerp between
   the side's corner heights - by an override that reaches exactly 1 on
-  the edge line, so every interior point next to the boundary meets the
-  same contour both neighbouring flowers build.
+  the edge line and, on the line, listens to that edge alone, so every
+  interior point next to the boundary meets the same contour both
+  neighbouring flowers build.
 * Noise: +/-noise_mm fine texture in the bands and over organic hexes,
   never on a pad.
 * Roads and rivers are polylines with rounded bends from one side's
@@ -64,6 +65,10 @@ class FieldParams:
     # Sinuous fronts: the band start moves by up to this fraction of the
     # apothem, driven by a slow noise.
     wobble: float = 0.12
+    # Within this fraction of the apothem of a silhouette edge, the other
+    # silhouette edges' say in the contour override fades to nothing, so
+    # ON an edge the field is exactly that edge's declared contour.
+    edge_silence_r: float = 0.15
     wobble_cell_mm: float = 30.0
     # Fine texture in the bands / on organic hexes (never on a pad).
     noise_mm: float = 0.5
@@ -104,7 +109,9 @@ class FieldParams:
 DEFAULT_FIELD_PARAMS = FieldParams()
 
 
-def fillet_polyline(points: Sequence[Point2D], radius: float, step_mm: float = 0.5) -> np.ndarray:
+def fillet_polyline(
+    points: Sequence[Point2D], radius: float, step_mm: float = 0.5, min_radius: float = 0.0
+) -> np.ndarray:
     """Straight legs through `points` with every bend rounded by a circular
     arc of `radius` (reduced where a leg is too short for it). A bend's
     inner medial axis then lies `radius` away from the centreline, so any
@@ -130,6 +137,11 @@ def fillet_polyline(points: Sequence[Point2D], radius: float, step_mm: float = 0
         cap = 0.5 * min(la, lb)
         if t > cap:
             t, r = cap, cap / math.tan(turn / 2.0)
+        if r < min_radius:
+            raise ValueError(
+                f"a {math.degrees(turn):.0f}-degree bend at {tuple(np.round(cur, 2))} can only be "
+                f"rounded to {r:.1f} mm, below the {min_radius:.1f} mm the band's width needs"
+            )
         p_in, p_out = cur - a * t, cur + b * t
         bis = b - a
         bis /= np.linalg.norm(bis)
@@ -187,10 +199,15 @@ class Path:
     """A road or river centreline: dense polyline, arc length, bed height."""
 
     def __init__(
-        self, kind: str, control_points: Sequence[Point2D], crossings: list[Crossing], bend_radius_mm: float
+        self,
+        kind: str,
+        control_points: Sequence[Point2D],
+        crossings: list[Crossing],
+        bend_radius_mm: float,
+        min_radius_mm: float = 0.0,
     ):
         self.kind = kind
-        poly = _resample(fillet_polyline(control_points, bend_radius_mm), 0.5)
+        poly = _resample(fillet_polyline(control_points, bend_radius_mm, min_radius=min_radius_mm), 0.5)
         # Make each crossing an exact sample: its bed is then pinned to the
         # declared height exactly (not interpolated between two samples a
         # hair away from it), which is what the neighbour computes too.
@@ -385,7 +402,12 @@ class TerrainField:
             raise ValueError(f"bend_radius_mm {r} must exceed the widest half-width {reach}")
         # 60-degree bends at the ring centres: the arc's tangent length must leave the crossing leg straight
         assert r * math.tan(math.pi / 6) <= self.apothem - reach
-        return Path(kind, pts, [c_in, c_out], r)
+        half = (
+            self.params.road_half_width_mm + self.params.road_edge_mm
+            if kind == "road"
+            else self.params.river_half_width_mm
+        )
+        return Path(kind, pts, [c_in, c_out], r, min_radius_mm=half + 0.5)
 
     def socket_allowed(self, hex_idx: int, clearance_mm: float) -> bool:
         """A top socket needs its whole lattice ring on the flat pad: the
@@ -452,6 +474,7 @@ class TerrainField:
         hex_dist = 0.0
         ext_w: list[float] = []
         ext_t: list[float] = []
+        ext_n: list[float] = []
         for e in self._edges[hex_idx]:
             n = ((x - cx) * e.nx + (y - cy) * e.ny) / A
             nc = min(max(n, 0.0), 1.0)
@@ -472,13 +495,35 @@ class TerrainField:
                 u = min(max(u, 0.0), 1.0)
                 ext_w.append(w)
                 ext_t.append(e.z0 + (e.z1 - e.z0) * u)
+                ext_n.append(min(n, 1.0))
         level = num / den
         if ext_w:
             keep = 1.0
             for w in ext_w:
                 keep *= 1.0 - w
             W = 1.0 - keep
-            T = sum(w * t for w, t in zip(ext_w, ext_t)) / sum(ext_w)
+            # The contour to drive towards: each exterior edge's lerp at the
+            # nearest point of its segment, weighted by its band - but an
+            # edge's say is silenced next to ANOTHER exterior edge of this
+            # hex, so on an edge the field is exactly that edge's contour and
+            # at a corner exactly the corner height. Without that, the
+            # adjacent edge's corner-clamped height pulled the field up to a
+            # millimetre off the contour along the edge, on whichever of the
+            # two flowers sharing it owns the adjacent edge with the same ring
+            # hex: a crease along the seam.
+            silence = []
+            for i in range(len(ext_w)):
+                factor = 1.0
+                for j, nj in enumerate(ext_n):
+                    if j != i:
+                        factor *= _smootherstep(min(max((1.0 - nj) / p.edge_silence_r, 0.0), 1.0))
+                silence.append(factor)
+            weight_sum = sum(w * f for w, f in zip(ext_w, silence))
+            if weight_sum > 1e-12:
+                T = sum(w * f * t for w, f, t in zip(ext_w, silence, ext_t)) / weight_sum
+            else:  # at a corner: every edge meeting there says the corner height
+                at_corner = [t for t, nn in zip(ext_t, ext_n) if nn > 1.0 - 1e-9]
+                T = sum(at_corner) / len(at_corner) if at_corner else ext_t[max(range(len(ext_w)), key=ext_w.__getitem__)]
             level = (1.0 - W) * level + W * T
         if hex_idx not in self.plateau_hexes:
             return level, wmax
