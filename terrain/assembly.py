@@ -7,12 +7,15 @@ pipeline (see the project plan's Phase 4 note).
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import trimesh
 
 from terrain.base_plate import build_floor_cap
 from terrain.boundary_noise import hash_to_unit_interval
 from terrain.constants import BASE_PLATE_DEPTH_MM
+from terrain.field import DEFAULT_FIELD_PARAMS, FieldParams, TerrainField
 from terrain.layout import FlowerLayout
 from terrain.magnets import DEFAULT_MAGNET_BORES, MagnetBores
 from terrain.standability import check_min_standable_hexes
@@ -65,7 +68,7 @@ def build_flower_mesh(
     subdivisions_per_edge: int = 8,
     jitter_amplitude: float = 0.05,
     xy_jitter_mm: float = 1.0,
-    interior_relief_mm: float = 1.0,
+    interior_relief_mm: float = 2.0,
     include_hex_grooves: bool = True,
     groove_depth_mm: float = 0.6,
     groove_width_mm: float = 0.5,
@@ -74,6 +77,7 @@ def build_flower_mesh(
     plate_depth_mm: float = BASE_PLATE_DEPTH_MM,
     magnet_bores: MagnetBores | None = DEFAULT_MAGNET_BORES,
     top_sockets: bool = True,
+    field_params: FieldParams = DEFAULT_FIELD_PARAMS,
 ) -> trimesh.Trimesh:
     """Build one flower's complete printable solid: the terrain surface
     (decisions #1-#10) whose walls run straight down to the print bed at
@@ -93,12 +97,11 @@ def build_flower_mesh(
     V only forms where two hexes or two flowers meet, a lone silhouette
     edge reads as a "/" skirt.
 
-    A flower's declared roads (tileset.py's FlowerDef.roads) are passed
-    straight through as road_water_side_pairs; only one road per flower is
-    currently supported (surface_mesh.py raises NotImplementedError for
-    more than one), and combining a road with include_hex_grooves on the
-    same flower isn't wired up yet either (same limitation, unchanged from
-    Phase 5).
+    The interior comes from terrain/field.py (flat pads, S-curve bands,
+    sinuous fronts, organic relief of `interior_relief_mm`), which also
+    carries the flower's declared roads and rivers (tileset.py's
+    FlowerDef.roads / .water) as real 16 mm / 22 mm wide features, any
+    number per flower, compatible with the hex lines and the sockets.
     """
     flower = tileset.flowers[flower_id]
     layout = tileset.layout()
@@ -112,13 +115,30 @@ def build_flower_mesh(
         )
     bottom_z = -plate_depth_mm
 
-    road_water_side_pairs = flower.roads + flower.water
     plateau_hexes = pick_standable_hexes(
         flower.seed,
         min_standable=tileset.meta.min_standable_hexes,
         forced_count=standable_hexes,
     )
-    grooves = include_hex_grooves and not road_water_side_pairs
+    field = TerrainField(
+        layout,
+        {h: flower.hexes[str(h)].height_level for h in range(FlowerLayout.HEX_CELL_COUNT)},
+        plateau_hexes,
+        flower.side_corner_heights,
+        level_z,
+        flower.seed,
+        params=replace(field_params, organic_relief_mm=interior_relief_mm),
+        roads=[(r.entry, r.exit, r.via) for r in flower.roads],
+        rivers=[(w.entry, w.exit, w.via) for w in flower.water],
+    )
+    grooves = include_hex_grooves
+    socket_hexes: list[int] = []
+    if top_sockets and magnet_bores is not None:
+        # the socket's lattice ring must sit on flat pad, clear of any road/river
+        clearance = (magnet_bores.radius_mm + 1.0) / (3**0.5 / 2) + (
+            layout.hex_outer_width / subdivisions_per_edge
+        ) + 0.5
+        socket_hexes = [h for h in plateau_hexes if field.socket_allowed(h, clearance)]
 
     solid = build_flower_open_solid(
         flower.side_corner_heights,
@@ -137,10 +157,10 @@ def build_flower_mesh(
         hex_height_levels={
             hex_idx: flower.hexes[str(hex_idx)].height_level for hex_idx in plateau_hexes
         },
-        road_water_side_pairs=road_water_side_pairs,
         magnet_bores=magnet_bores,
         magnet_sockets=magnet_bores if (top_sockets and grooves) else None,
-        socket_hexes=plateau_hexes,
+        socket_hexes=socket_hexes,
+        field=field,
     )
 
     all_faces = solid.faces + build_floor_cap(solid.footprint_triangles, solid.top_count)

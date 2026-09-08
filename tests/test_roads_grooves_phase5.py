@@ -12,6 +12,7 @@ import math
 
 import pytest
 
+from terrain.constants import BASE_PLATE_DEPTH_MM
 from terrain.heights import HeightLevels
 from terrain.layout import FlowerLayout
 from terrain.roads import internal_hex_edges, side_entry_point, subdivide_line
@@ -71,7 +72,9 @@ def test_groove_depth_actually_depresses_the_surface(layout: FlowerLayout) -> No
         interior_relief_mm=0.0,
         groove_depth_mm=0.0,
     )
-    assert flat_mesh.vertices[:, 2].max() - flat_mesh.vertices[:, 2].min() < 1e-9
+    # top surface only: the solid now bottoms out on the print bed
+    flat_top = flat_mesh.vertices[flat_mesh.vertices[:, 2] > -BASE_PLATE_DEPTH_MM + 1e-6]
+    assert flat_top[:, 2].max() - flat_top[:, 2].min() < 1e-9
 
     grooved_mesh = build_flower_surface_mesh(
         FLAT_SIDES,
@@ -91,7 +94,8 @@ def test_groove_depth_actually_depresses_the_surface(layout: FlowerLayout) -> No
     # build_flower_cells' groove_offset), so the deepest achievable point
     # is the closest INTERIOR grid row, one grid step in from the edge -
     # short of the full groove_depth_mm, not equal to it.
-    depression = flat_mesh.vertices[:, 2].max() - grooved_mesh.vertices[:, 2].min()
+    grooved_top = grooved_mesh.vertices[grooved_mesh.vertices[:, 2] > -BASE_PLATE_DEPTH_MM + 1e-6]
+    depression = flat_top[:, 2].max() - grooved_top[:, 2].min()
     assert 0.5 < depression <= 1.5 + 1e-6
 
 

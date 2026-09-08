@@ -16,8 +16,14 @@ import math
 
 import trimesh
 
-from terrain.heightfield import PLATEAU_AREA_FRAC
 from terrain.layout import FlowerLayout
+
+# Fraction of a cell's area that must measure flat: the 2026-09 field's
+# pads cover 55% of a hex on average, but their band start wobbles inward
+# by up to 0.054 of the apothem (terrain/field.py FieldParams.pad_min_r
+# = 0.688 linear = 47% of the area), so the measured region must stay
+# inside that: 40% (0.632 linear).
+STANDABLE_REGION_FRAC = 0.40
 
 
 def hex_cell_z_range(
@@ -25,7 +31,7 @@ def hex_cell_z_range(
     layout: FlowerLayout,
     hex_idx: int,
     *,
-    region_frac: float = PLATEAU_AREA_FRAC,
+    region_frac: float = STANDABLE_REGION_FRAC,
 ) -> float:
     """Max - min Z among the mesh's own top-surface vertices inside hex
     cell `hex_idx`'s PLATEAU - 0.0 for a perfectly flat plateau, larger

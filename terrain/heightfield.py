@@ -13,6 +13,7 @@ import math
 from typing import Callable, Collection, Sequence
 
 from terrain.boundary_noise import sample_noise_1d, sample_noise_2d
+from terrain.field import TerrainField
 from terrain.layout import FlowerLayout
 from terrain.triangulate import point_in_polygon
 
@@ -130,8 +131,14 @@ def build_side_boundary_vertices(
             jitter = sample_noise_1d(
                 corner_heights, float(global_pos), total_positions, channel=0
             )
-            z = base_z + jitter * jitter_amplitude * one_level_z
-            window = 4.0 * t * (1.0 - t)  # 0 at the true corners, 1 at t=0.5
+            # 0 at the true corners, 1 at t=0.5. Both jitters are windowed:
+            # a side corner is shared by three flowers, each of which keeps
+            # the copy from a different one of its own two sides there
+            # (build_flower_boundary_loop keeps the next side's first
+            # corner), and those two sides hash different 4-tuples - so
+            # only a jitter-free corner is the same vertex in all three.
+            window = 4.0 * t * (1.0 - t)
+            z = base_z + jitter * jitter_amplitude * one_level_z * window
             xy_jitter = sample_noise_1d(
                 corner_heights, float(global_pos), total_positions, channel=1
             )
@@ -289,6 +296,7 @@ def build_flower_cells(
     socket_radius_mm: float = 0.0,
     socket_depth_mm: float = 0.0,
     socket_margin_mm: float = 1.0,
+    field: TerrainField | None = None,
 ) -> tuple[list[Vertex3D], list[int], list[Triangle], list[Triangle]]:
     """Triangulate each of the flower's 7 hex cells INDEPENDENTLY, as its
     own simple hexagon, instead of one Delaunay pass over the whole
@@ -307,6 +315,14 @@ def build_flower_cells(
     point, so every socket vertex shares its XY with a rim vertex at
     plateau height and terrain/standability.py's "highest Z per XY" rule
     still sees the hex as flat.
+
+    `field` (terrain/field.py, the 2026-09 model: flat pads, S-curve
+    bands to the mean of neighbouring hexes, sinuous fronts, roads and
+    rivers) replaces the interior height model below when given: every
+    interior/edge point's Z comes from it, silhouette points get its
+    road/river crossing rule, and plateau heights come from it rather
+    than hex_height_levels. Without it the older inverse-distance blend
+    of the 18 corner heights plus relief noise is used.
 
     Returns (vertices, boundary_indices, triangles, footprint_triangles).
     footprint_triangles is the same top surface with every socket capped
@@ -424,6 +440,11 @@ def build_flower_cells(
             xy_jitter_mm=xy_jitter_mm,
             flat_window_mm=xy_flat_window_mm,
         )
+    if field is not None:
+        # roads/rivers crossing the silhouette: the same rule, in declared
+        # data only, that the neighbouring flower applies to its copy
+        for side_idx, pts in list(side_points.items()):
+            side_points[side_idx] = [(x, y, field.boundary_z(x, y, z)) for x, y, z in pts]
 
     # local_edge_idx -> (fine 3D points, (side_idx, abs start position in
     # side_points[side_idx])), per ring hex. The abs position lets us later
@@ -510,6 +531,8 @@ def build_flower_cells(
         return total_wz / total_w
 
     def interior_z(x: float, y: float) -> float:
+        if field is not None:
+            return field.z_at(x, y)
         return interior_base_z(x, y) + sample_noise_2d(seed, x, y) * interior_relief_mm
 
     def canonical_point(x: float, y: float) -> Vertex3D:
@@ -642,7 +665,10 @@ def build_flower_cells(
 
         _plateau_r = math.sqrt(plateau_area_frac) if plateau_area_frac > 0.0 else 0.0
         _plateau_z: float | None = None
-        if hex_height_levels is not None and hex_idx in hex_height_levels:
+        if field is not None:
+            _plateau_r = field.params.pad_min_r
+            _plateau_z = field.plateau_z(hex_idx)
+        elif hex_height_levels is not None and hex_idx in hex_height_levels:
             _plateau_z = level_z(hex_height_levels[hex_idx])
 
         def hex_radial(x: float, y: float) -> float:
@@ -662,6 +688,8 @@ def build_flower_cells(
             is what lets two cells at different height_levels still agree
             exactly on the vertices they share (the disagreement that made
             an earlier attempt at consuming height_level get reverted)."""
+            if field is not None:
+                return field.z(hex_idx, x, y)
             if _plateau_z is None:
                 return interior_z(x, y)
             h = hex_radial(x, y)
@@ -873,7 +901,10 @@ def build_flower_cells(
                     existing = sunken_edge_registry.get(key)
                     if existing is not None:
                         return existing
-                    sunk = (v[0], v[1], v[2] - _skirt_depth)
+                    sink = _skirt_depth
+                    if field is not None:
+                        sink *= 1.0 - field.river_bank_factor(v[0], v[1])
+                    sunk = (v[0], v[1], v[2] - sink)
                     sunken_edge_registry[key] = sunk
                     return sunk
 

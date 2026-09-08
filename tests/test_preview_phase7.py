@@ -33,10 +33,13 @@ def test_default_tileset_preview_map_has_two_adjacent_flowers(tileset) -> None:
     """tilesets/default.yaml places hill_peak at (-1, 1) relative to
     flat_plains at (0, 0) specifically because that's the one delta where
     the two flowers' side_corner_heights actually match (flat_plains side
-    2, hill_peak side 5, both all-zero) - see the YAML's own comment."""
-    assert len(tileset.preview_map) == 2
-    positions = {p.at for p in tileset.preview_map}
-    assert positions == {(0, 0), (-1, 1)}
+    2, hill_peak side 5, both all-zero) - see the YAML's own comment. The
+    map has since grown a road/river pair (crossroads, river_bend) too;
+    this test only pins the original adjacency."""
+    by_position = {p.at: p.id for p in tileset.preview_map}
+    assert by_position[(0, 0)] == "flat_plains"
+    assert by_position[(-1, 1)] == "hill_peak"
+    assert len(by_position) == len(tileset.preview_map), "placements overlap"
 
 
 def test_preview_mesh_is_watertight_and_positive_volume(tileset) -> None:
@@ -53,10 +56,9 @@ def test_preview_mesh_is_watertight_and_positive_volume(tileset) -> None:
 def test_preview_mesh_volume_is_sum_of_individual_flowers(tileset) -> None:
     from terrain.assembly import build_flower_mesh
 
-    flat = build_flower_mesh(tileset, "flat_plains")
-    peak = build_flower_mesh(tileset, "hill_peak")
+    expected = sum(build_flower_mesh(tileset, p.id).volume for p in tileset.preview_map)
     preview = build_preview_mesh(tileset)
-    assert preview.volume == pytest.approx(flat.volume + peak.volume, rel=1e-6)
+    assert preview.volume == pytest.approx(expected, rel=1e-6)
 
 
 def test_adjacent_flowers_boundary_matches_along_its_full_length(tileset) -> None:

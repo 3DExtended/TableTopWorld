@@ -87,9 +87,10 @@ pipeline's breakage go undetected for a long time.
 | `terrain/layout.py` (`FlowerLayout`) | 7-hex flower graph: cell centers/polygons, the 18 true exterior edges grouped into 6 sides of 4 corners, hex-to-hex edges, road/water junction points, `flower_grid_to_xy()` for flower-to-flower placement |
 | `terrain/heights.py` (`HeightLevels`) | Configurable discrete height-level system (level count, mm per level) |
 | `terrain/boundary_noise.py` | Deterministic hash-based value noise (splitmix64-style bit-mixing, no trig/libm) for the jagged boundary contour and freeform interior relief |
-| `terrain/heightfield.py` | Builds the per-side deterministic boundary contour, the whole-flower boundary loop, the freeform interior PSLG, and per-hex-cell groove triangulation |
+| `terrain/heightfield.py` | Builds the per-side deterministic boundary contour, the whole-flower boundary loop, and per-hex-cell triangular lattices with the sunken half-V strip along every edge and the top magnet sockets |
+| `terrain/field.py` | The interior height field: flat plateau pads with S-curve bands, organic relief, and roads/rivers (16 mm / 22 mm) carved along filleted polylines that cross the silhouette at a side's middle-edge midpoint |
 | `terrain/triangulate.py` | Thin wrapper around `mapbox_earcut` (ear-clipping) and a point-in-polygon test, isolating the third-party triangulation dependency |
-| `terrain/roads.py` | Road/river centerlines starting/ending exactly at side-corner positions, split via ear-clipping into two boundary-preserving regions |
+| `terrain/roads.py` | Legacy Phase 5 road embedding (corner-to-corner centreline as mesh edges); production roads live in `terrain/field.py` |
 | `terrain/surface_mesh.py` | Triangulates the PSLG (or road/groove variants), lifts to Z, returns a `trimesh.Trimesh` — or, for assembly, an open solid with no bottom cap |
 | `terrain/base_plate.py` | Floor on the print bed, mirrored from the top surface onto its own bottom vertex copies (no boolean union, no ear-clipping) |
 | `terrain/magnets.py` | 18 blind magnet bores (5.3 × 2.2 mm, centred 3.9 mm above the bed) cut into the walls at every silhouette edge's midpoint, as structured radial-sector collars |
@@ -121,8 +122,9 @@ flowers:
       "<0-5>": [c0, c1, c2, c3]
     seed: <int>
     roads:
-      - { entry_junction: 0, exit_junction: 4 }
-    water: []
+      - [3, 0]                              # entry side, exit side
+    water:
+      - { entry: 4, exit: 1, via: [5, 0, 2] } # optional route through hex centres
 ```
 
 - **Hex index 0** = center; **1–6** = ring.
@@ -133,7 +135,11 @@ flowers:
   `(k+3)%6` — validated for any two `rot=0` `preview_map` placements that are
   grid-adjacent.
 - **`seed`**: per-flower integer seeding the freeform interior relief noise —
-  independent of the boundary contract (decision #5).
+  independent of the boundary contract (decision #5); it also picks which
+  hexes are standable plateaus.
+- **`roads` / `water`**: each enters and leaves through the midpoint of a
+  side's middle edge; the validator requires the neighbour in `preview_map`
+  to carry the same feature on its facing side.
 - **No named edge-profile catalog** — matching is exact numeric equality
   (once correctly oriented), not compatibility-table lookup.
 
@@ -147,8 +153,6 @@ flowers:
 ## Out of Scope
 
 - Auto-layout / CSP map generator
-- Top-face magnet sockets on standable hexes (the wall bores are done; see `terrain/magnets.py`)
-- `HexDef.height_level` currently has no effect on generated geometry beyond validation — only `side_corner_heights` (boundary) and `seed` (interior) drive the mesh; flagged, not silently assumed
 - Bridges (road + water on the same corner)
 - Single-hex prints, web UI, game rules engine
 

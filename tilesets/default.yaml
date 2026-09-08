@@ -13,6 +13,12 @@ preview_map:
   # the cross-flower side-matching validation and multi-flower preview
   # placement end to end.
   - { id: hill_peak, at: [-1, 1], rot: 0 }
+  # crossroads and river_bend share crossroads's side 0 / river_bend's side
+  # 3 (grid direction 0): a road runs straight through both, and the
+  # continuation check in validate_tileset() covers it. Placed away from the
+  # first pair so they touch nothing else.
+  - { id: crossroads, at: [4, 0], rot: 0 }
+  - { id: river_bend, at: [5, 0], rot: 0 }
 
 flowers:
   flat_plains:
@@ -57,3 +63,51 @@ flowers:
     seed: 7
     roads: []
     water: []
+
+  # A level-1 flower with a road from side 3 to side 0 (through hexes 4, 0, 1)
+  # and a river from side 5 to side 2 (hexes 6, 0, 3) crossing it at the centre.
+  crossroads:
+    hexes:
+      "0": { height_level: 1 }
+      "1": { height_level: 1 }
+      "2": { height_level: 2 }
+      "3": { height_level: 1 }
+      "4": { height_level: 1 }
+      "5": { height_level: 0 }
+      "6": { height_level: 1 }
+    side_corner_heights:
+      0: [1, 1, 1, 1]
+      1: [1, 1, 1, 1]
+      2: [1, 1, 1, 1]
+      3: [1, 1, 1, 1]
+      4: [1, 1, 1, 1]
+      5: [1, 1, 1, 1]
+    seed: 21
+    roads:
+      - [3, 0]
+    water:
+      - [5, 2]
+
+  # Continues crossroads's road (its side 0 -> this side 3) on to side 0,
+  # and bends a river from side 4 round to side 1 across it.
+  river_bend:
+    hexes:
+      "0": { height_level: 0 }
+      "1": { height_level: 0 }
+      "2": { height_level: 1 }
+      "3": { height_level: 1 }
+      "4": { height_level: 0 }
+      "5": { height_level: 0 }
+      "6": { height_level: 0 }
+    side_corner_heights:
+      0: [0, 0, 0, 0]
+      1: [0, 0, 0, 0]
+      2: [0, 0, 1, 1]
+      3: [1, 1, 1, 1]
+      4: [1, 1, 0, 0]
+      5: [0, 0, 0, 0]
+    seed: 33
+    roads:
+      - { entry: 3, exit: 0 }
+    water:
+      - { entry: 4, exit: 1, via: [5, 0, 2] }

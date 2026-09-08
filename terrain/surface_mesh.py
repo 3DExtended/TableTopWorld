@@ -20,10 +20,12 @@ from terrain.heightfield import (
     build_flower_cells,
     build_flower_pslg,
 )
+from terrain.field import TerrainField
 from terrain.layout import FlowerLayout
 from terrain.magnets import MagnetBores, cut_magnet_bores
 from terrain.roads import build_flower_mesh_with_road
 from terrain.triangulate import triangulate_polygon
+from terrain.constants import BASE_PLATE_DEPTH_MM
 
 Point2D = tuple[float, float]
 
@@ -82,6 +84,7 @@ def _build_flower_top_and_walls(
     magnet_bores: MagnetBores | None = None,
     magnet_sockets: MagnetBores | None = None,
     socket_hexes: Collection[int] = (),
+    field: TerrainField | None = None,
 ) -> tuple[
     list[tuple[float, float, float]],
     list[tuple[int, int, int]],
@@ -170,6 +173,7 @@ def _build_flower_top_and_walls(
             socket_hexes=socket_hexes if magnet_sockets is not None else (),
             socket_radius_mm=magnet_sockets.radius_mm if magnet_sockets else 0.0,
             socket_depth_mm=magnet_sockets.depth_mm if magnet_sockets else 0.0,
+            field=field,
         )
         boundary_count = len(boundary_indices)
         final_points_2d = [(x, y) for x, y, _ in final_vertices_3d]
@@ -232,7 +236,7 @@ def build_flower_surface_mesh(
     level_z: Callable[[int], float],
     seed: int,
     *,
-    bottom_z: float = 0.0,
+    bottom_z: float = -BASE_PLATE_DEPTH_MM,
     subdivisions_per_edge: int = 8,
     jitter_amplitude: float = 0.3,
     xy_jitter_mm: float = 0.0,
@@ -248,6 +252,7 @@ def build_flower_surface_mesh(
     magnet_bores: MagnetBores | None = None,
     magnet_sockets: MagnetBores | None = None,
     socket_hexes: Collection[int] = (),
+    field: TerrainField | None = None,
 ) -> trimesh.Trimesh:
     """Full 7-hex flower as one closed solid: the deterministic jagged
     boundary (decision #2-#4) triangulated together with a freeform seeded
@@ -300,6 +305,7 @@ def build_flower_surface_mesh(
         magnet_bores=magnet_bores,
         magnet_sockets=magnet_sockets,
         socket_hexes=socket_hexes,
+        field=field,
     )
     for i, j, k in footprint:
         faces.append((n + k, n + j, n + i))
@@ -350,6 +356,7 @@ def build_flower_open_solid(
     magnet_bores: MagnetBores | None = None,
     magnet_sockets: MagnetBores | None = None,
     socket_hexes: Collection[int] = (),
+    field: TerrainField | None = None,
 ) -> OpenSolid:
     """Same top surface + walls as build_flower_surface_mesh, but with NO
     bottom cap - left open at bottom_z for terrain/assembly.py to close
@@ -379,5 +386,6 @@ def build_flower_open_solid(
         magnet_bores=magnet_bores,
         magnet_sockets=magnet_sockets,
         socket_hexes=socket_hexes,
+        field=field,
     )
     return OpenSolid(vertices, faces, bottom_rim_indices, top_triangles, top_count, footprint)

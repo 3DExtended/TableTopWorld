@@ -245,7 +245,7 @@ def test_neighbouring_flowers_bores_face_each_other(tileset) -> None:
     layout = tileset.layout()
     b = DEFAULT_MAGNET_BORES
     z = -BASE_PLATE_DEPTH_MM + b.center_above_bed_mm
-    placements = {p.id: p for p in tileset.preview_map}
+    placements = {p.id: p for p in tileset.preview_map if p.id in ("flat_plains", "hill_peak")}
     assert len(placements) == 2
     ends: dict[str, list[np.ndarray]] = {}
     for pid, placement in placements.items():

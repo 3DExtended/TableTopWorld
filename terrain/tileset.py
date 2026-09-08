@@ -30,14 +30,26 @@ class HexDef:
     height_level: int
 
 
+@dataclass(frozen=True)
+class PathDecl:
+    """A road or river: enters at side `entry`'s middle edge, leaves at
+    side `exit`'s, optionally routed through the hex cells in `via`
+    (default: the two ring hexes owning those edges, through the centre
+    hex when they are not adjacent). See terrain/field.py."""
+
+    entry: int
+    exit: int
+    via: tuple[int, ...] = ()
+
+
 @dataclass
 class FlowerDef:
     id: str
     hexes: dict[str, HexDef]
     side_corner_heights: dict[int, tuple[int, int, int, int]]
     seed: int
-    roads: list[tuple[int, int]] = field(default_factory=list)
-    water: list[tuple[int, int]] = field(default_factory=list)
+    roads: list[PathDecl] = field(default_factory=list)
+    water: list[PathDecl] = field(default_factory=list)
 
 
 @dataclass
@@ -183,25 +195,34 @@ def _validate_level(value: Any, heights: HeightLevels, label: str, path: Path) -
 
 def _parse_junction_paths(
     items: list[Any], label: str, fid: str, path: Path
-) -> list[tuple[int, int]]:
-    result: list[tuple[int, int]] = []
+) -> list[PathDecl]:
+    result: list[PathDecl] = []
     for item in items:
+        via: tuple[int, ...] = ()
         if isinstance(item, dict):
             entry = item.get("entry_junction", item.get("entry"))
             exit_ = item.get("exit_junction", item.get("exit"))
+            raw_via = item.get("via") or []
+            if not isinstance(raw_via, list) or not all(
+                isinstance(h, int) and h in range(FlowerLayout.HEX_CELL_COUNT) for h in raw_via
+            ):
+                raise TilesetError(
+                    f"{path}: flower {fid!r}: {label} 'via' must be a list of hex indices 0..6"
+                )
+            via = tuple(raw_via)
         elif isinstance(item, (list, tuple)) and len(item) == 2:
             entry, exit_ = item[0], item[1]
         else:
             raise TilesetError(
-                f"{path}: flower {fid!r} {label} entry must be "
-                "{{entry_junction, exit_junction}} or [entry, exit]"
+                f"{path}: flower {fid!r}: {label} entries must be [entry, exit] or "
+                "{entry, exit, via}"
             )
-        for j in (entry, exit_):
-            if not isinstance(j, int) or j not in range(6):
+        for value in (entry, exit_):
+            if not isinstance(value, int) or value not in range(FlowerLayout.SIDE_COUNT):
                 raise TilesetError(
-                    f"{path}: flower {fid!r} {label} junction {j!r} must be integer 0..5"
+                    f"{path}: flower {fid!r}: {label} sides must be integers 0..5, got {value!r}"
                 )
-        result.append((int(entry), int(exit_)))
+        result.append(PathDecl(entry=entry, exit=exit_, via=via))
     return result
 
 
@@ -253,11 +274,10 @@ def validate_tileset(tileset: Tileset, layout: FlowerLayout | None = None) -> No
         raise TilesetError("meta.min_standable_hexes must be >= 0")
     for flower in tileset.flowers.values():
         for road_or_water in (*flower.roads, *flower.water):
-            entry, exit_ = road_or_water
-            if entry == exit_:
+            if road_or_water.entry == road_or_water.exit:
                 raise TilesetError(
                     f"flower {flower.id!r}: road/water entry and exit junction "
-                    f"must differ, got {entry}"
+                    f"must differ, got {road_or_water.entry}"
                 )
 
     by_position = {p.at: p for p in tileset.preview_map}
@@ -282,3 +302,17 @@ def validate_tileset(tileset: Tileset, layout: FlowerLayout | None = None) -> No
                     f"({tuple(reversed(neighbor_side))}) - these are the same "
                     "physical shared boundary"
                 )
+            # a road/river leaving through this side must continue next door
+            for label, mine, theirs in (
+                ("road", flower.roads, neighbor.roads),
+                ("river", flower.water, neighbor.water),
+            ):
+                here = any(k in (p.entry, p.exit) for p in mine)
+                there = any((k + 3) % FlowerLayout.SIDE_COUNT in (p.entry, p.exit) for p in theirs)
+                if here != there:
+                    raise TilesetError(
+                        f"preview_map: flower {flower.id!r} at {placement.at} side {k} "
+                        f"{'has' if here else 'has no'} {label} but flower "
+                        f"{neighbor.id!r} at {neighbor_placement.at} side "
+                        f"{(k + 3) % FlowerLayout.SIDE_COUNT} {'has none' if here else 'has one'}"
+                    )
