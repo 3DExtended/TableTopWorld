@@ -59,21 +59,23 @@ def render_mesh(
     colors = np.clip(colors[:, :3] * brightness[:, None], 0, 1)
     colors = np.concatenate([colors, np.ones((len(colors), 1))], axis=1)
 
+    # Frame the mesh's own box (true proportions), not its bounding sphere:
+    # a wide flat landscape would otherwise fill a tenth of the picture.
     bounds = mesh.bounds
-    center = bounds.mean(axis=0)
-    radius = np.linalg.norm(bounds[1] - bounds[0]) / 2
+    pad = 0.02 * np.linalg.norm(bounds[1] - bounds[0])
+    lo, hi = bounds[0] - pad, bounds[1] + pad
 
-    fig = plt.figure(figsize=(6 * len(views), 6))
+    fig = plt.figure(figsize=(8 * len(views), 8))
     for i, view in enumerate(views):
         elev, azim = VIEWS[view]
         ax = fig.add_subplot(1, len(views), i + 1, projection="3d")
         coll = Poly3DCollection(tris, facecolor=colors, edgecolor="none", linewidths=0)
         ax.add_collection3d(coll)
-        ax.set_xlim(center[0] - radius, center[0] + radius)
-        ax.set_ylim(center[1] - radius, center[1] + radius)
-        ax.set_zlim(center[2] - radius, center[2] + radius)
+        ax.set_xlim(lo[0], hi[0])
+        ax.set_ylim(lo[1], hi[1])
+        ax.set_zlim(lo[2], hi[2])
         ax.view_init(elev=elev, azim=azim)
-        ax.set_box_aspect((1, 1, 1))
+        ax.set_box_aspect(tuple(hi - lo), zoom=1.25 if view in ("iso", "top") else 1.0)
         ax.set_axis_off()
         ax.set_title(view)
 

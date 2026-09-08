@@ -1,21 +1,22 @@
-"""Generate tilesets/landscape.yaml: a 19-flower landscape.
+"""Generate the 19-flower landscape tilesets (one per preset).
 
 The flowers fill a hexagon of radius 2 on the flower grid (every (q, r)
-with max(|q|, |r|, |q+r|) <= 2). Every number in the tileset is derived
+with max(|q|, |r|, |q+r|) <= 2). Every number in a tileset is derived
 from ONE continuous elevation field over world millimetres - hex levels
 at the hex centres, side corner heights at the corner positions - so the
 two flowers that share a side always declare the same corners and the
-landscape reads as one piece instead of 19 tiles. A river meanders from
-the west edge to the east edge through a valley cut into that field, and
-a road runs south to north and fords the river in the centre column.
+landscape reads as one piece instead of 19 tiles. A river meanders
+through a valley cut into that field and a road fords it.
 
-Run from the repo root:
+Presets (PRESETS below): `landscape` uses all four levels,
+`hills` only three (no level 3). Run from the repo root:
 
-    .venv/bin/python scripts/gen_landscape.py
+    .venv/bin/python scripts/gen_landscape.py                  # tilesets/landscape.yaml
+    .venv/bin/python scripts/gen_landscape.py --preset hills   # tilesets/hills.yaml
 
 and preview with
 
-    .venv/bin/python -m terrain.cli render preview --tileset tilesets/landscape.yaml --output output/landscape.stl
+    .venv/bin/python -m terrain.cli render preview --tileset tilesets/hills.yaml --output output/hills.stl
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,33 +34,96 @@ from terrain.layout import FlowerLayout  # noqa: E402
 
 HEX_OUTER_WIDTH = 5.1961525
 SCALE = 5
-LEVEL_COUNT = 4
 GRID_DELTAS = ((1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1))  # side k -> neighbour delta
 RADIUS = 2
 
-# Paths as sequences of flower-grid cells, in flow direction. Consecutive
-# cells must be grid neighbours, and a path may not leave a flower through
-# a side adjacent to the one it entered (that is a 120-degree bend, tighter
-# than a road or river is wide - the validator rejects it).
-RIVER = [(-2, 0), (-1, 0), (-1, 1), (0, 1), (1, 0), (2, 0)]
-ROAD = [(0, -2), (0, -1), (0, 0), (0, 1), (0, 2)]
+Cell = tuple[int, int]
 
-# Elevation field ingredients, in world mm: (flower cell, height in levels, radius)
-HILLS = [((1, 1), 2.4, 150.0), ((-1, -1), 1.7, 110.0), ((2, -2), 1.3, 95.0), ((-2, 2), 0.9, 90.0)]
-VALLEY_DEPTH = 2.6
-VALLEY_HALF_WIDTH = 38.0
-BASE_LEVEL = 1.0
+
+@dataclass(frozen=True)
+class Preset:
+    """One landscape: the elevation field's ingredients and the two routes.
+
+    Paths are sequences of flower-grid cells in flow direction. Consecutive
+    cells must be grid neighbours, and a path may not leave a flower through
+    a side adjacent to the one it entered (that is a 120-degree bend, tighter
+    than a road or river is wide - the validator rejects it).
+    """
+
+    prefix: str  # flower ids are <prefix>_<column><row>
+    level_count: int
+    base_level: float
+    # (flower cells, height in levels, radius in mm): a Gaussian hill centred
+    # on the centroid of the cells' centres - one cell for a hill on a flower,
+    # two for one astride a seam, three for one around a three-flower corner.
+    hills: tuple[tuple[tuple[Cell, ...], float, float], ...]
+    valley_depth: float  # levels, along the river
+    valley_half_width: float  # mm
+    river: tuple[Cell, ...]
+    road: tuple[Cell, ...]
+    seed_base: int
+    blurb: tuple[str, ...]  # header comment lines
+
+
+PRESETS = {
+    "landscape": Preset(
+        prefix="land",
+        level_count=4,
+        base_level=1.0,
+        hills=((((1, 1),), 2.4, 150.0), (((-1, -1),), 1.7, 110.0), (((2, -2),), 1.3, 95.0), (((-2, 2),), 0.9, 90.0)),
+        valley_depth=2.6,
+        valley_half_width=38.0,
+        river=((-2, 0), (-1, 0), (-1, 1), (0, 1), (1, 0), (2, 0)),
+        road=((0, -2), (0, -1), (0, 0), (0, 1), (0, 2)),
+        seed_base=101,
+        blurb=(
+            "A 19-flower landscape: a hexagon of flowers (radius 2 on the flower",
+            "grid) whose hex levels and side corner heights all come from one",
+            "continuous elevation field, so every shared side matches by",
+            "construction. Plains at level 1, a valley at level 0 along the river",
+            "(west edge to east edge), hills up to level 3 in the north-east and",
+            "west, and a road from the south edge to the north edge that fords the",
+            "river in flower land_c4.",
+        ),
+    ),
+    "hills": Preset(
+        prefix="hill",
+        level_count=3,
+        base_level=1.0,
+        hills=(
+            (((1, 1), (0, 2)), 1.3, 105.0),  # north-east ridge astride the d4/c5 seam
+            (((-1, -1),), 1.25, 100.0),  # south-west hill on b2, spilling into its neighbours
+            (((2, -2), (2, -1), (1, -1)), 1.1, 85.0),  # south-east hill around the e1/e2/d2 corner
+            (((-2, 2), (-2, 1)), 1.0, 80.0),  # north-west hill astride the a5/a4 seam
+        ),
+        valley_depth=2.6,
+        valley_half_width=36.0,
+        river=((-2, 0), (-1, 0), (-1, 1), (0, 1), (1, 0), (2, 0)),
+        road=((1, -2), (1, -1), (0, 0), (0, 1), (0, 2)),
+        seed_base=201,
+        blurb=(
+            "A 19-flower landscape on three height levels (no level 3): the same",
+            "hexagon of flowers as landscape.yaml, every level and corner from one",
+            "continuous elevation field. Plains at level 1, a valley at level 0",
+            "along the river (west edge to east edge), level-2 hills that straddle",
+            "seams and corners (a north-east ridge, a south-west hill, a three-flower",
+            "hill in the south-east, a north-west hill), and a road from the",
+            "south-east edge that bends north in flower hill_c3 and fords the",
+            "river in hill_c4.",
+        ),
+    ),
+}
 
 
 def column_name(q: int) -> str:
     return "abcde"[q + RADIUS]
 
 
-def flower_id(q: int, r: int) -> str:
-    return f"land_{column_name(q)}{r + RADIUS + 1}"
+def flower_id(prefix: str, q: int, r: int) -> str:
+    return f"{prefix}_{column_name(q)}{r + RADIUS + 1}"
 
 
-def path_segments(cells: list[tuple[int, int]]) -> dict[tuple[int, int], tuple[int, int]]:
+def path_segments(cells: tuple[Cell, ...] | list[Cell]) -> dict[Cell, tuple[int, int]]:
     """{cell: (entry_side, exit_side)} for a path through `cells`; the
     first cell enters from outside the map opposite its first step and the
     last cell leaves the map continuing its entry direction."""
@@ -81,8 +146,11 @@ def path_segments(cells: list[tuple[int, int]]) -> dict[tuple[int, int], tuple[i
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--output", type=Path, default=ROOT / "tilesets" / "landscape.yaml")
+    parser.add_argument("--preset", choices=sorted(PRESETS), default="landscape")
+    parser.add_argument("--output", type=Path, default=None, help="default: tilesets/<preset>.yaml")
     args = parser.parse_args(argv)
+    preset = PRESETS[args.preset]
+    out = args.output or ROOT / "tilesets" / f"{args.preset}.yaml"
     layout = FlowerLayout(HEX_OUTER_WIDTH * SCALE)
     cells = [
         (q, r)
@@ -91,12 +159,12 @@ def main(argv: list[str] | None = None) -> None:
         if max(abs(q), abs(r), abs(q + r)) <= RADIUS
     ]
     origin = {cell: layout.flower_grid_to_xy(*cell) for cell in cells}
-    river = path_segments(RIVER)
-    road = path_segments(ROAD)
+    river = path_segments(preset.river)
+    road = path_segments(preset.road)
 
     # The river's world polyline: crossing -> ring hex -> centre hex -> ring hex -> crossing per flower.
     river_poly: list[tuple[float, float]] = []
-    for cell in RIVER:
+    for cell in preset.river:
         ox, oy = origin[cell]
         entry, exit_side = river[cell]
         # exits are never adjacent to the entry, so the route always runs through the centre hex
@@ -122,32 +190,27 @@ def main(argv: list[str] | None = None) -> None:
         return best
 
     def elevation(x: float, y: float) -> float:
-        e = BASE_LEVEL
-        for cell, height, radius in HILLS:
-            hx, hy = origin[cell]
+        e = preset.base_level
+        for cells_of_hill, height, radius in preset.hills:
+            hx = sum(origin[c][0] for c in cells_of_hill) / len(cells_of_hill)
+            hy = sum(origin[c][1] for c in cells_of_hill) / len(cells_of_hill)
             d2 = (x - hx) ** 2 + (y - hy) ** 2
             e += height * math.exp(-d2 / (radius * radius))
         d = dist_to_river(x, y)
-        e -= VALLEY_DEPTH * math.exp(-(d * d) / (VALLEY_HALF_WIDTH * VALLEY_HALF_WIDTH))
+        e -= preset.valley_depth * math.exp(-(d * d) / (preset.valley_half_width**2))
         return e
 
     def level_at(x: float, y: float) -> int:
-        return int(min(max(round(elevation(x, y)), 0), LEVEL_COUNT - 1))
+        return int(min(max(round(elevation(x, y)), 0), preset.level_count - 1))
 
     lines = [
-        "# GENERATED by scripts/gen_landscape.py - edit that script, not this file.",
+        f"# GENERATED by scripts/gen_landscape.py --preset {args.preset} - edit that script, not this file.",
         "#",
-        "# A 19-flower landscape: a hexagon of flowers (radius 2 on the flower",
-        "# grid) whose hex levels and side corner heights all come from one",
-        "# continuous elevation field, so every shared side matches by",
-        "# construction. Plains at level 1, a valley at level 0 along the river",
-        "# (west edge to east edge), hills up to level 3 in the north-east and",
-        "# west, and a road from the south edge to the north edge that fords the",
-        "# river in flower land_c4.",
+        *(f"# {line}" for line in preset.blurb),
         "",
         "meta:",
         "  height_step_mm: 15",
-        f"  level_count: {LEVEL_COUNT}",
+        f"  level_count: {preset.level_count}",
         f"  scale: {SCALE}",
         f"  hex_outer_width: {HEX_OUTER_WIDTH}",
         "  min_standable_hexes: 1",
@@ -155,11 +218,11 @@ def main(argv: list[str] | None = None) -> None:
         "preview_map:",
     ]
     for cell in cells:
-        lines.append(f"  - {{ id: {flower_id(*cell)}, at: [{cell[0]}, {cell[1]}], rot: 0 }}")
+        lines.append(f"  - {{ id: {flower_id(preset.prefix, *cell)}, at: [{cell[0]}, {cell[1]}], rot: 0 }}")
     lines += ["", "flowers:"]
     for index, cell in enumerate(cells):
         ox, oy = origin[cell]
-        fid = flower_id(*cell)
+        fid = flower_id(preset.prefix, *cell)
         levels = []
         for h in range(FlowerLayout.HEX_CELL_COUNT):
             cx, cy = layout.cell_center(h)
@@ -183,7 +246,7 @@ def main(argv: list[str] | None = None) -> None:
         lines.append("    side_corner_heights:")
         for k, side in enumerate(sides):
             lines.append(f"      {k}: [{', '.join(str(v) for v in side)}]")
-        lines.append(f"    seed: {101 + index}")
+        lines.append(f"    seed: {preset.seed_base + index}")
         if cell in road:
             entry, exit_side = road[cell]
             lines.append(f"    roads: [[{entry}, {exit_side}]]")
@@ -195,7 +258,6 @@ def main(argv: list[str] | None = None) -> None:
         else:
             lines.append("    water: []")
         lines.append("")
-    out = args.output
     out.write_text("\n".join(lines))
     counts = {}
     for cell in cells:

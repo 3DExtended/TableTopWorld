@@ -99,6 +99,9 @@ north-east and west, and a road runs south to north and fords the river in
 the centre column. Edit the script (hills, valley, the river and road
 routes) and rerun it; a test checks the committed YAML is what the script
 produces. `render tileset` writes the 19 printable STLs into a folder.
+**`tilesets/hills.yaml`** (`--preset hills`) is the same hexagon on three
+levels only: valley, plains and level-2 hills that straddle seams and
+three-flower corners, with the road entering from the south-east.
 
 ## How a flower is built
 

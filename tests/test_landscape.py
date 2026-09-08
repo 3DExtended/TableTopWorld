@@ -1,7 +1,7 @@
-"""tilesets/landscape.yaml: 19 flowers on a hexagon of the flower grid,
+"""The generated landscapes (tilesets/landscape.yaml on four levels,
+tilesets/hills.yaml on three): 19 flowers on a hexagon of the flower grid,
 every number derived from one elevation field by scripts/gen_landscape.py,
-with a river across six flowers and a road across five that ford at the
-centre column.
+with a river across six flowers and a road across five that ford.
 
 Built coarse (4 subdivisions per edge) so all 19 flowers build in about a
 second; the checks are about seams and paths, not surface detail.
@@ -24,14 +24,19 @@ from terrain.layout import FlowerLayout
 from terrain.tileset import _NEIGHBOR_GRID_DELTAS, TilesetError, load_tileset
 
 ROOT = Path(__file__).resolve().parent.parent
-LANDSCAPE = ROOT / "tilesets" / "landscape.yaml"
 GENERATOR = ROOT / "scripts" / "gen_landscape.py"
+PRESETS = ("landscape", "hills")
 N = 4
 
 
+@pytest.fixture(scope="module", params=PRESETS)
+def tileset_path(request) -> Path:
+    return ROOT / "tilesets" / f"{request.param}.yaml"
+
+
 @pytest.fixture(scope="module")
-def tileset():
-    return load_tileset(LANDSCAPE)
+def tileset(tileset_path):
+    return load_tileset(tileset_path)
 
 
 @pytest.fixture(scope="module")
@@ -76,10 +81,10 @@ def _rim(mesh, layout, side: int, offset) -> np.ndarray:
     return w[keep]
 
 
-def test_generator_reproduces_the_committed_tileset(tmp_path) -> None:
-    out = tmp_path / "landscape.yaml"
-    subprocess.run([sys.executable, str(GENERATOR), "--output", str(out)], check=True, cwd=ROOT)
-    assert out.read_text() == LANDSCAPE.read_text()
+def test_generator_reproduces_the_committed_tileset(tmp_path, tileset_path) -> None:
+    out = tmp_path / tileset_path.name
+    subprocess.run([sys.executable, str(GENERATOR), "--preset", tileset_path.stem, "--output", str(out)], check=True, cwd=ROOT)
+    assert out.read_text() == tileset_path.read_text()
 
 
 def test_nineteen_flowers_fill_a_hexagon_of_radius_two(tileset) -> None:
@@ -88,7 +93,7 @@ def test_nineteen_flowers_fill_a_hexagon_of_radius_two(tileset) -> None:
     assert all(max(abs(q), abs(r), abs(q + r)) <= 2 for q, r in cells)
     assert {p.id for p in tileset.preview_map} == set(tileset.flowers)
     levels = {fl.hexes[str(h)].height_level for fl in tileset.flowers.values() for h in range(7)}
-    assert levels == {0, 1, 2, 3}, "a landscape should use every level"
+    assert levels == set(range(tileset.meta.level_count)), "a landscape should use every level it declares"
 
 
 def test_every_flower_is_a_printable_solid(meshes) -> None:
@@ -173,16 +178,16 @@ def test_river_and_road_continue_across_their_seams(tileset) -> None:
     assert crossings == 9  # 5 river seams + 4 road seams
 
 
-def test_render_tileset_writes_one_printable_stl_per_flower(tmp_path) -> None:
-    """`render tileset` is how the landscape gets printed: one STL per placed
+def test_render_tileset_writes_one_printable_stl_per_flower(tmp_path, tileset_path) -> None:
+    """`render tileset` is how a landscape gets printed: one STL per placed
     flower plus a README that says where each file goes."""
     import trimesh
 
     from terrain.cli import main
 
     out_dir = tmp_path / "flowers"
-    assert main(["render", "tileset", "--tileset", str(LANDSCAPE), "--output-dir", str(out_dir), "--subdivisions-per-edge", str(N)]) == 0
-    ts = load_tileset(LANDSCAPE)
+    assert main(["render", "tileset", "--tileset", str(tileset_path), "--output-dir", str(out_dir), "--subdivisions-per-edge", str(N)]) == 0
+    ts = load_tileset(tileset_path)
     files = sorted(p.name for p in out_dir.glob("*.stl"))
     assert files == sorted(f"{p.id}.stl" for p in ts.preview_map)
     for name in files[:3]:
@@ -191,7 +196,7 @@ def test_render_tileset_writes_one_printable_stl_per_flower(tmp_path) -> None:
     readme = (out_dir / "README.md").read_text()
     for p in ts.preview_map:
         assert f"`{p.id}.stl`" in readme and f"({p.at[0]}, {p.at[1]})" in readme
-    assert "land_c3" in readme.split("```")[1]  # the placement map names every flower
+    assert ts.preview_map[0].id in readme.split("```")[1]  # the placement map names every flower
 
 
 def test_preview_volume_is_the_sum_of_its_flowers(tileset, meshes) -> None:
