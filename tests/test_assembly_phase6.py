@@ -133,12 +133,13 @@ def test_plateau_sits_exactly_at_the_declared_height_level(tileset) -> None:
     for hex_idx in picked:
         declared = tileset.meta.heights.z(flower.hexes[str(hex_idx)].height_level)
         assert hex_cell_z_range(mesh, layout, hex_idx) == pytest.approx(0.0, abs=1e-6)
-        # and it is flat AT the declared level, not just flat somewhere
+        # and it is flat AT the declared level, not just flat somewhere:
+        # the socket's rim (a few mm from the centre) sits on the pad
         cx, cy = layout.cell_center(hex_idx)
         centre_z = max(
             float(z)
             for x, y, z in mesh.vertices
-            if abs(float(x) - cx) < 1e-6 and abs(float(y) - cy) < 1e-6
+            if math.hypot(float(x) - cx, float(y) - cy) < 4.0
         )
         assert centre_z == pytest.approx(declared, abs=1e-6)
 
@@ -226,8 +227,8 @@ def test_magnet_bores_remove_their_cylinder_volume(tileset) -> None:
     """The bores are real cavities, not decoration: the solid built with
     bores is lighter than the same solid without them by 18 blind
     cylinders (a 24-gon prism, hence the tolerance)."""
-    with_bores = build_flower_mesh(tileset, "flat_plains")
-    without = build_flower_mesh(tileset, "flat_plains", magnet_bores=None)
+    with_bores = build_flower_mesh(tileset, "flat_plains", top_sockets=False)
+    without = build_flower_mesh(tileset, "flat_plains", magnet_bores=None, top_sockets=False)
     assert without.is_watertight and with_bores.is_watertight
     b = DEFAULT_MAGNET_BORES
     expected = 18 * math.pi * b.radius_mm**2 * b.depth_mm
@@ -262,6 +263,46 @@ def test_neighbouring_flowers_bores_face_each_other(tileset) -> None:
                 assert mouth[2] == pytest.approx(z)
                 pairs += 1
     assert pairs == 3
+
+
+@pytest.mark.parametrize("flower_id", ["flat_plains", "hill_peak"])
+def test_every_standable_hex_carries_one_top_socket(tileset, flower_id: str) -> None:
+    """Peter: magnet sockets "only on flat hexes". Every plateau hex has a
+    blind socket of the disc size in the middle of its pad (its floor
+    ring sits depth_mm below the declared level at the bore radius), no
+    other hex has one, and the standability check still counts the
+    socketed hexes as flat."""
+    layout = tileset.layout()
+    flower = tileset.flowers[flower_id]
+    picked = pick_standable_hexes(flower.seed, min_standable=tileset.meta.min_standable_hexes)
+    mesh = build_flower_mesh(tileset, flower_id)
+    assert mesh.is_watertight and mesh.is_winding_consistent
+    verts = np.asarray(mesh.vertices)
+    verts = verts[verts[:, 2] > -BASE_PLATE_DEPTH_MM + 1e-6]  # not the floor's copies
+    b = DEFAULT_MAGNET_BORES
+    for hex_idx in range(FlowerLayout.HEX_CELL_COUNT):
+        cx, cy = layout.cell_center(hex_idx)
+        d = np.hypot(verts[:, 0] - cx, verts[:, 1] - cy)
+        near = verts[(d < b.radius_mm + 1e-6) & (d > b.radius_mm - 1e-6)]
+        if hex_idx in picked:
+            declared = tileset.meta.heights.z(flower.hexes[str(hex_idx)].height_level)
+            assert len(near) >= 48, hex_idx  # >= 24 rim + 24 floor vertices
+            assert near[:, 2].min() == pytest.approx(declared - b.depth_mm, abs=1e-6)
+            assert near[:, 2].max() == pytest.approx(declared, abs=1e-6)
+        else:
+            assert len(near) == 0, hex_idx
+    ok, count, _ = standability_report(mesh, tileset)
+    assert count == len(picked)
+
+
+def test_top_sockets_remove_their_cylinder_volume(tileset) -> None:
+    flower = tileset.flowers["flat_plains"]
+    picked = pick_standable_hexes(flower.seed, min_standable=tileset.meta.min_standable_hexes)
+    with_sockets = build_flower_mesh(tileset, "flat_plains")
+    without = build_flower_mesh(tileset, "flat_plains", top_sockets=False)
+    b = DEFAULT_MAGNET_BORES
+    expected = len(picked) * math.pi * b.radius_mm**2 * b.depth_mm
+    assert without.volume - with_sockets.volume == pytest.approx(expected, rel=0.05)
 
 
 def test_too_shallow_plate_is_rejected(tileset) -> None:

@@ -10,7 +10,7 @@ on top of this same structure.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Sequence
+from typing import Callable, Collection, Sequence
 
 import numpy as np
 import trimesh
@@ -80,12 +80,15 @@ def _build_flower_top_and_walls(
     road_water_side_pairs: Sequence[tuple[int, int]],
     road_subdivisions: int,
     magnet_bores: MagnetBores | None = None,
+    magnet_sockets: MagnetBores | None = None,
+    socket_hexes: Collection[int] = (),
 ) -> tuple[
     list[tuple[float, float, float]],
     list[tuple[int, int, int]],
     list[tuple[int, int, int]],
     list[int],
     int,
+    list[tuple[int, int, int]],
 ]:
     """Shared body behind both build_flower_surface_mesh (closed solid) and
     build_flower_open_solid (open at the bottom, for terrain/assembly.py to
@@ -96,14 +99,17 @@ def _build_flower_top_and_walls(
     `magnet_bores` cuts one blind bore per silhouette edge into those walls
     (terrain/magnets.py); the boundary's XY jitter is switched off around
     each bore so the wall there is planar. bottom_z is then the print bed.
+    `magnet_sockets` (same disc dimensions) sinks a socket into the middle
+    of each hex in `socket_hexes` - grooves branch only.
 
-    Returns (vertices, faces, top_triangles, bottom_rim_indices, n) - n is
-    the vertex count of the top surface alone (bottom vertex i lives at
-    index n+i); top_triangles is also returned separately (not just folded
-    into faces) so a caller adding its own bottom cap doesn't have to
-    re-derive which faces in the combined list are the top surface's own;
-    bottom_rim_indices are (already offset by n) the flat-bottom
-    counterparts of the boundary loop, in boundary order.
+    Returns (vertices, faces, top_triangles, bottom_rim_indices, n,
+    footprint_triangles) - n is the vertex count of the top surface alone
+    (bottom vertex i lives at index n+i); top_triangles is also returned
+    separately (not just folded into faces); bottom_rim_indices are
+    (already offset by n) the flat-bottom counterparts of the boundary
+    loop, in boundary order; footprint_triangles is the planar XY
+    triangulation a bottom cap must mirror (the top surface with any
+    magnet sockets capped over - see heightfield.build_flower_cells).
     """
     xy_flat_window_mm = 0.0
     if magnet_bores is not None:
@@ -111,6 +117,11 @@ def _build_flower_top_and_walls(
         xy_flat_window_mm = magnet_bores.flat_window_mm(
             layout.hex_outer_width, subdivisions_per_edge
         )
+
+    if magnet_sockets is not None and socket_hexes and not (
+        include_hex_grooves and not road_water_side_pairs
+    ):
+        raise NotImplementedError("magnet sockets are only built by the hex-cell branch")
 
     if road_water_side_pairs:
         if len(road_water_side_pairs) > 1:
@@ -140,8 +151,9 @@ def _build_flower_top_and_walls(
         boundary_count = len(boundary_loop_3d)
         final_points_2d = [(x, y) for x, y, _ in final_vertices_3d]
         boundary_indices = list(range(boundary_count))
+        footprint = top_triangles
     elif include_hex_grooves:
-        final_vertices_3d, boundary_indices, top_triangles = build_flower_cells(
+        final_vertices_3d, boundary_indices, top_triangles, footprint = build_flower_cells(
             side_corner_heights,
             layout,
             level_z,
@@ -155,6 +167,9 @@ def _build_flower_top_and_walls(
             groove_width_mm=groove_width_mm,
             groove_profile=groove_profile,
             hex_height_levels=hex_height_levels,
+            socket_hexes=socket_hexes if magnet_sockets is not None else (),
+            socket_radius_mm=magnet_sockets.radius_mm if magnet_sockets else 0.0,
+            socket_depth_mm=magnet_sockets.depth_mm if magnet_sockets else 0.0,
         )
         boundary_count = len(boundary_indices)
         final_points_2d = [(x, y) for x, y, _ in final_vertices_3d]
@@ -177,6 +192,7 @@ def _build_flower_top_and_walls(
         final_vertices_3d = all_vertices_3d
         _, top_triangles = triangulate_polygon(boundary_2d, interior_2d)
         boundary_indices = list(range(boundary_count))
+        footprint = top_triangles
 
     n = len(final_points_2d)
     top_verts = final_vertices_3d
@@ -207,7 +223,7 @@ def _build_flower_top_and_walls(
         faces.append((i0, n + i0, i1))
         faces.append((i1, n + i0, n + i1))
 
-    return vertices, faces, top_triangles, bottom_rim_indices, n
+    return vertices, faces, top_triangles, bottom_rim_indices, n, footprint
 
 
 def build_flower_surface_mesh(
@@ -230,6 +246,8 @@ def build_flower_surface_mesh(
     road_water_side_pairs: Sequence[tuple[int, int]] = (),
     road_subdivisions: int = 10,
     magnet_bores: MagnetBores | None = None,
+    magnet_sockets: MagnetBores | None = None,
+    socket_hexes: Collection[int] = (),
 ) -> trimesh.Trimesh:
     """Full 7-hex flower as one closed solid: the deterministic jagged
     boundary (decision #2-#4) triangulated together with a freeform seeded
@@ -261,7 +279,7 @@ def build_flower_surface_mesh(
     hole, not a bug) - terrain/assembly.py always calls this with a
     bottom_z below every configured height level for exactly this reason.
     """
-    vertices, faces, top_triangles, _, n = _build_flower_top_and_walls(
+    vertices, faces, _, _, n, footprint = _build_flower_top_and_walls(
         side_corner_heights,
         layout,
         level_z,
@@ -280,8 +298,10 @@ def build_flower_surface_mesh(
         road_water_side_pairs=road_water_side_pairs,
         road_subdivisions=road_subdivisions,
         magnet_bores=magnet_bores,
+        magnet_sockets=magnet_sockets,
+        socket_hexes=socket_hexes,
     )
-    for i, j, k in top_triangles:
+    for i, j, k in footprint:
         faces.append((n + k, n + j, n + i))
 
     return trimesh.Trimesh(
@@ -304,6 +324,8 @@ class OpenSolid:
     bottom_rim_indices: list[int]
     top_triangles: list[tuple[int, int, int]]
     top_count: int
+    # the planar XY triangulation a floor must mirror (sockets capped over)
+    footprint_triangles: list[tuple[int, int, int]]
 
 
 def build_flower_open_solid(
@@ -326,6 +348,8 @@ def build_flower_open_solid(
     road_water_side_pairs: Sequence[tuple[int, int]] = (),
     road_subdivisions: int = 10,
     magnet_bores: MagnetBores | None = None,
+    magnet_sockets: MagnetBores | None = None,
+    socket_hexes: Collection[int] = (),
 ) -> OpenSolid:
     """Same top surface + walls as build_flower_surface_mesh, but with NO
     bottom cap - left open at bottom_z for terrain/assembly.py to close
@@ -334,7 +358,7 @@ def build_flower_open_solid(
     solids and unioning them with a boolean (which this whole redesign
     deliberately avoids - see the project plan's library-choice rationale).
     """
-    vertices, faces, top_triangles, bottom_rim_indices, top_count = _build_flower_top_and_walls(
+    vertices, faces, top_triangles, bottom_rim_indices, top_count, footprint = _build_flower_top_and_walls(
         side_corner_heights,
         layout,
         level_z,
@@ -353,5 +377,7 @@ def build_flower_open_solid(
         road_water_side_pairs=road_water_side_pairs,
         road_subdivisions=road_subdivisions,
         magnet_bores=magnet_bores,
+        magnet_sockets=magnet_sockets,
+        socket_hexes=socket_hexes,
     )
-    return OpenSolid(vertices, faces, bottom_rim_indices, top_triangles, top_count)
+    return OpenSolid(vertices, faces, bottom_rim_indices, top_triangles, top_count, footprint)

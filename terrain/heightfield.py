@@ -10,7 +10,7 @@ match with nothing else exchanged or stored.
 from __future__ import annotations
 
 import math
-from typing import Callable, Sequence
+from typing import Callable, Collection, Sequence
 
 from terrain.boundary_noise import sample_noise_1d, sample_noise_2d
 from terrain.layout import FlowerLayout
@@ -285,10 +285,34 @@ def build_flower_cells(
     groove_profile: list[tuple[float, float]] | None = None,
     hex_height_levels: dict[int, int] | None = None,
     plateau_area_frac: float = PLATEAU_AREA_FRAC,
-) -> tuple[list[Vertex3D], list[Vertex3D], list[Triangle]]:
+    socket_hexes: Collection[int] = (),
+    socket_radius_mm: float = 0.0,
+    socket_depth_mm: float = 0.0,
+    socket_margin_mm: float = 1.0,
+) -> tuple[list[Vertex3D], list[int], list[Triangle], list[Triangle]]:
     """Triangulate each of the flower's 7 hex cells INDEPENDENTLY, as its
     own simple hexagon, instead of one Delaunay pass over the whole
     flower's interior.
+
+    `socket_hexes` get a blind magnet socket (socket_radius_mm x
+    socket_depth_mm) sunk into the middle of their flat plateau, for the
+    magnet a mini's base or a scatter piece snaps onto. Each such hex must
+    be a plateau hex (in hex_height_levels). The socket is cut without a
+    boolean: the lattice triangles inside ring K around the apex (the
+    smallest ring whose inradius clears radius + margin) are simply not
+    emitted, the ring's 6K lattice vertices are fanned to a socket circle
+    whose vertices sit on those same 6K directions (q per ring segment,
+    at least 24 in all), and a cylinder wall plus a fan floor close it.
+    The floor is fanned from one of its own rim vertices, not a centre
+    point, so every socket vertex shares its XY with a rim vertex at
+    plateau height and terrain/standability.py's "highest Z per XY" rule
+    still sees the hex as flat.
+
+    Returns (vertices, boundary_indices, triangles, footprint_triangles).
+    footprint_triangles is the same top surface with every socket capped
+    over at its rim (no wall, no floor): a planar triangulation of the
+    flower's XY footprint, which terrain/base_plate.py mirrors onto the
+    flat bottom copies of the vertices. Without sockets it is `triangles`.
 
     `groove_depth_mm` (decision #10) carves a real, visible/tactile
     recessed channel tracing each cell's own 6-edge outline, so hex-cell
@@ -548,6 +572,9 @@ def build_flower_cells(
     n = subdivisions_per_edge
     all_vertices: list[Vertex3D] = []
     all_triangles: list[Triangle] = []
+    # socket walls/floors are not part of the XY footprint; the rim caps are
+    excluded_from_footprint: set[int] = set()
+    footprint_extra: list[Triangle] = []
     side_position_to_global_index: dict[tuple[int, int], int] = {}
 
     for hex_idx in range(FlowerLayout.HEX_CELL_COUNT):
@@ -723,6 +750,29 @@ def build_flower_cells(
                 all_vertices.append(v)
             return idx
 
+        # Magnet socket: ring K of the lattice (a concentric hexagon K
+        # steps out from the apex) must clear the socket by the margin and
+        # still lie on the flat plateau, where cell_z is exactly _plateau_z.
+        socket_K = 0
+        socket_ring: list[int] = []
+        if hex_idx in socket_hexes:
+            if _plateau_z is None:
+                raise ValueError(
+                    f"hex {hex_idx}: a magnet socket needs a flat (height_level) plateau"
+                )
+            rim_step = (
+                math.hypot(rim_spokes[0][n][0] - apex[0], rim_spokes[0][n][1] - apex[1]) / n
+            )
+            need = socket_radius_mm + socket_margin_mm
+            socket_K = max(1, math.ceil(need / (rim_step * math.sqrt(3.0) / 2.0) - 1e-9))
+            max_K = min(n - 1, int(math.floor(_plateau_r * n / max(_skirt_scale, 1e-9) - 1e-9)))
+            if socket_K > max_K:
+                raise ValueError(
+                    f"hex {hex_idx}: a {2 * socket_radius_mm:.1f} mm magnet socket does not "
+                    f"fit inside the flat plateau at subdivisions_per_edge={n} "
+                    f"(needs lattice ring {socket_K}, plateau allows {max_K})"
+                )
+
         for edge_idx in range(FlowerLayout.EDGES_PER_HEX):
             # Barycentric grid over the wedge (apex, corner_i,
             # corner_{i+1}): I counts steps from apex toward corner_i (the
@@ -889,13 +939,40 @@ def build_flower_cells(
 
             for I in range(n):
                 for J in range(n - I):
-                    p1 = local_index(grid_point(I, J))
-                    p2 = local_index(grid_point(I + 1, J))
-                    p3 = local_index(grid_point(I, J + 1))
-                    all_triangles.append((p1 + offset, p2 + offset, p3 + offset))
-                    if I + J < n - 1:
+                    # The "up" triangle (I,J)-(I+1,J)-(I,J+1) lies inside
+                    # ring K iff I+J+1 <= K; the "down" triangle
+                    # (I+1,J)-(I+1,J+1)-(I,J+1) iff I+J+2 <= K. Inside the
+                    # socket ring nothing is emitted (the socket replaces it).
+                    if I + J >= socket_K:
+                        p1 = local_index(grid_point(I, J))
+                        p2 = local_index(grid_point(I + 1, J))
+                        p3 = local_index(grid_point(I, J + 1))
+                        all_triangles.append((p1 + offset, p2 + offset, p3 + offset))
+                    if I + J < n - 1 and I + J + 2 > socket_K:
+                        p2 = local_index(grid_point(I + 1, J))
+                        p3 = local_index(grid_point(I, J + 1))
                         p4 = local_index(grid_point(I + 1, J + 1))
                         all_triangles.append((p2 + offset, p4 + offset, p3 + offset))
+            if socket_K:
+                # this wedge's share of ring K, from its I axis toward its
+                # J axis; (0, K) is the next wedge's (K, 0), the same object
+                for J in range(socket_K):
+                    socket_ring.append(local_index(grid_point(socket_K - J, J)))
+
+        if socket_K:
+            not_footprint, cap = _emit_magnet_socket(
+                all_vertices,
+                all_triangles,
+                local_index,
+                offset,
+                socket_ring,
+                (cx, cy),
+                _plateau_z,  # type: ignore[arg-type]  (checked above)
+                socket_radius_mm,
+                socket_depth_mm,
+            )
+            excluded_from_footprint.update(range(len(all_triangles) - not_footprint, len(all_triangles)))
+            footprint_extra.extend(cap)
 
         for edge_idx in exterior_edges:
             side_idx, start = exterior_fine_meta[hex_idx][edge_idx]
@@ -919,7 +996,127 @@ def build_flower_cells(
         for abs_pos in range(len(side_points[side_idx]) - 1)
     ]
 
-    return all_vertices, boundary_indices, all_triangles
+    if excluded_from_footprint:
+        footprint = [
+            tri for i, tri in enumerate(all_triangles) if i not in excluded_from_footprint
+        ] + footprint_extra
+    else:
+        footprint = all_triangles
+
+    return all_vertices, boundary_indices, all_triangles, footprint
+
+
+def _emit_magnet_socket(
+    all_vertices: list[Vertex3D],
+    all_triangles: list[Triangle],
+    local_index: Callable[[Vertex3D], int],
+    offset: int,
+    ring: list[int],
+    centre: Point2D,
+    z_pad: float,
+    radius: float,
+    depth: float,
+) -> tuple[int, list[Triangle]]:
+    """Cut one blind socket into a flat plateau, inside the lattice ring
+    `ring` (local indices, a convex polygon around `centre` whose inside
+    has been left untriangulated). See build_flower_cells.
+
+    Appends the annulus (part of the footprint) and then the wall and
+    floor (not part of it) to all_triangles; returns how many of those
+    trailing triangles are not footprint, plus the cap fan over the rim
+    (global indices) that stands in for them in the footprint."""
+    cx, cy = centre
+
+    def xy(local: int) -> Point2D:
+        v = all_vertices[offset + local]
+        return (v[0], v[1])
+
+    def shoelace(poly: list[int]) -> float:
+        area = 0.0
+        for a, b in zip(poly, poly[1:] + poly[:1]):
+            (ax, ay), (bx, by) = xy(a), xy(b)
+            area += ax * by - bx * ay
+        return 0.5 * area
+
+    if shoelace(ring) < 0:
+        ring = ring[::-1]
+    n_ring = len(ring)
+    q = max(1, math.ceil(24 / n_ring))
+    m = n_ring * q
+
+    def emit_ccw(tri: Triangle) -> None:
+        """Top-surface convention: CCW seen from +Z, normal up."""
+        area = shoelace(list(tri))
+        if abs(area) < 1e-9:
+            raise RuntimeError("degenerate triangle in a magnet socket")
+        if area < 0:
+            tri = (tri[0], tri[2], tri[1])
+        all_triangles.append((tri[0] + offset, tri[1] + offset, tri[2] + offset))
+
+    def emit_toward_axis(tri: Triangle) -> None:
+        a, b, c = (all_vertices[offset + i] for i in tri)
+        ab = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+        ac = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+        nx = ab[1] * ac[2] - ab[2] * ac[1]
+        ny = ab[2] * ac[0] - ab[0] * ac[2]
+        mx = (a[0] + b[0] + c[0]) / 3 - cx
+        my = (a[1] + b[1] + c[1]) / 3 - cy
+        dot = -(nx * mx + ny * my)  # normal should point at the axis
+        if abs(dot) < 1e-12:
+            raise RuntimeError("degenerate triangle in a magnet socket wall")
+        if dot < 0:
+            tri = (tri[0], tri[2], tri[1])
+        all_triangles.append((tri[0] + offset, tri[1] + offset, tri[2] + offset))
+
+    # Socket rim and floor circles: q vertices per ring segment, spread in
+    # angle between the segment's two ring directions.
+    rim: list[int] = []
+    floor: list[int] = []
+    for t in range(n_ring):
+        (x0, y0), (x1, y1) = xy(ring[t]), xy(ring[(t + 1) % n_ring])
+        a0 = math.atan2(y0 - cy, x0 - cx)
+        a1 = math.atan2(y1 - cy, x1 - cx)
+        while a1 <= a0:
+            a1 += 2.0 * math.pi
+        for i in range(q):
+            a = a0 + (a1 - a0) * i / q
+            x, y = cx + radius * math.cos(a), cy + radius * math.sin(a)
+            rim.append(local_index((x, y, z_pad)))
+            floor.append(local_index((x, y, z_pad - depth)))
+
+    # Annulus between ring and rim. Each segment's q rim chords are fanned
+    # from the segment's two ring vertices, half each, with one triangle
+    # closing the gap between the two fans. A point outside a circle only
+    # sees the arc within arccos(r/d) of its own direction (43 degrees at
+    # the minimum clearance) - fanning a whole 60-degree segment from one
+    # ring vertex, as a first version did, inverted the far chords at
+    # subdivisions_per_edge=6; half a segment is at most 30 degrees.
+    for t in range(n_ring):
+        h0, h1 = ring[t], ring[(t + 1) % n_ring]
+        base = t * q
+        half = (q + 1) // 2
+        for i in range(half):
+            emit_ccw((h0, rim[(base + i + 1) % m], rim[base + i]))
+        for i in range(half, q):
+            emit_ccw((h1, rim[(base + i + 1) % m], rim[base + i]))
+        emit_ccw((h0, h1, rim[(base + half) % m]))
+    before = len(all_triangles)
+    # Cylinder wall, normal at the axis.
+    for t in range(m):
+        t1 = (t + 1) % m
+        emit_toward_axis((rim[t], floor[t], floor[t1]))
+        emit_toward_axis((rim[t], floor[t1], rim[t1]))
+    # Floor, fanned from one of its own rim vertices (no centre vertex).
+    for t in range(1, m - 1):
+        emit_ccw((floor[0], floor[t], floor[t + 1]))
+    # Cap over the rim for the footprint, same fan, same winding.
+    cap: list[Triangle] = []
+    for t in range(1, m - 1):
+        tri = (rim[0], rim[t], rim[t + 1])
+        if shoelace(list(tri)) < 0:
+            tri = (tri[0], tri[2], tri[1])
+        cap.append((tri[0] + offset, tri[1] + offset, tri[2] + offset))
+    return len(all_triangles) - before, cap
 
 
 def _barycentric(

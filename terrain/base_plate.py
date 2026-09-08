@@ -32,6 +32,9 @@ from typing import Sequence
 Triangle = tuple[int, int, int]
 
 
-def build_floor_cap(top_triangles: Sequence[Triangle], top_count: int) -> list[Triangle]:
-    """Mirror the top surface onto its bottom copies, wound to face -Z."""
-    return [(top_count + k, top_count + j, top_count + i) for i, j, k in top_triangles]
+def build_floor_cap(footprint_triangles: Sequence[Triangle], top_count: int) -> list[Triangle]:
+    """Mirror the top surface's footprint triangulation (surface_mesh.
+    OpenSolid.footprint_triangles - the top with any magnet sockets capped
+    over, so no vertical or duplicated faces) onto its bottom copies,
+    wound to face -Z."""
+    return [(top_count + k, top_count + j, top_count + i) for i, j, k in footprint_triangles]

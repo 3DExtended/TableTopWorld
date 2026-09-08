@@ -73,6 +73,7 @@ def build_flower_mesh(
     standable_hexes: int | None = None,
     plate_depth_mm: float = BASE_PLATE_DEPTH_MM,
     magnet_bores: MagnetBores | None = DEFAULT_MAGNET_BORES,
+    top_sockets: bool = True,
 ) -> trimesh.Trimesh:
     """Build one flower's complete printable solid: the terrain surface
     (decisions #1-#10) whose walls run straight down to the print bed at
@@ -82,6 +83,9 @@ def build_flower_mesh(
     One Trimesh, no boolean union anywhere: the floor shares the walls'
     own bottom-rim vertex indices, and the bore patches share the wall
     quads' rim vertices (see terrain/base_plate.py for why that matters).
+    With `top_sockets`, every standable (plateau) hex also gets a socket
+    of the same disc size sunk into the middle of its flat pad, for
+    magnet-based minis and scatter (Peter's request: "only on flat hexes").
 
     Hex lines: each hex carries half of a 1.0 mm wide, 0.6 mm deep V
     (groove_width_mm x groove_depth_mm = 0.5 x 0.6, the "thin_line"
@@ -109,6 +113,12 @@ def build_flower_mesh(
     bottom_z = -plate_depth_mm
 
     road_water_side_pairs = flower.roads + flower.water
+    plateau_hexes = pick_standable_hexes(
+        flower.seed,
+        min_standable=tileset.meta.min_standable_hexes,
+        forced_count=standable_hexes,
+    )
+    grooves = include_hex_grooves and not road_water_side_pairs
 
     solid = build_flower_open_solid(
         flower.side_corner_heights,
@@ -120,23 +130,20 @@ def build_flower_mesh(
         jitter_amplitude=jitter_amplitude,
         xy_jitter_mm=xy_jitter_mm,
         interior_relief_mm=interior_relief_mm,
-        include_hex_grooves=include_hex_grooves and not road_water_side_pairs,
+        include_hex_grooves=grooves,
         groove_depth_mm=groove_depth_mm,
         groove_width_mm=groove_width_mm,
         groove_profile=groove_profile,
         hex_height_levels={
-            hex_idx: flower.hexes[str(hex_idx)].height_level
-            for hex_idx in pick_standable_hexes(
-                flower.seed,
-                min_standable=tileset.meta.min_standable_hexes,
-                forced_count=standable_hexes,
-            )
+            hex_idx: flower.hexes[str(hex_idx)].height_level for hex_idx in plateau_hexes
         },
         road_water_side_pairs=road_water_side_pairs,
         magnet_bores=magnet_bores,
+        magnet_sockets=magnet_bores if (top_sockets and grooves) else None,
+        socket_hexes=plateau_hexes,
     )
 
-    all_faces = solid.faces + build_floor_cap(solid.top_triangles, solid.top_count)
+    all_faces = solid.faces + build_floor_cap(solid.footprint_triangles, solid.top_count)
 
     return trimesh.Trimesh(
         vertices=np.array(solid.vertices), faces=np.array(all_faces), process=True
