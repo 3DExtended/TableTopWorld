@@ -67,8 +67,8 @@ def build_flower_mesh(
     xy_jitter_mm: float = 1.0,
     interior_relief_mm: float = 1.0,
     include_hex_grooves: bool = True,
-    groove_depth_mm: float = 1.5,
-    groove_width_mm: float = 6.0,
+    groove_depth_mm: float = 0.6,
+    groove_width_mm: float = 0.5,
     groove_profile: list[tuple[float, float]] | None = None,
     standable_hexes: int | None = None,
     plate_depth_mm: float = BASE_PLATE_DEPTH_MM,
@@ -82,6 +82,12 @@ def build_flower_mesh(
     One Trimesh, no boolean union anywhere: the floor shares the walls'
     own bottom-rim vertex indices, and the bore patches share the wall
     quads' rim vertices (see terrain/base_plate.py for why that matters).
+
+    Hex lines: each hex carries half of a 1.0 mm wide, 0.6 mm deep V
+    (groove_width_mm x groove_depth_mm = 0.5 x 0.6, the "thin_line"
+    prototype Peter approved from scripts/gen_groove_prototypes.py); the
+    V only forms where two hexes or two flowers meet, a lone silhouette
+    edge reads as a "/" skirt.
 
     A flower's declared roads (tileset.py's FlowerDef.roads) are passed
     straight through as road_water_side_pairs; only one road per flower is
