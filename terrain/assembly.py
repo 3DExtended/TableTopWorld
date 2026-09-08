@@ -65,7 +65,7 @@ def build_flower_mesh(
     tileset: Tileset,
     flower_id: str,
     *,
-    subdivisions_per_edge: int = 8,
+    subdivisions_per_edge: int = 16,
     jitter_amplitude: float = 0.05,
     xy_jitter_mm: float = 1.0,
     interior_relief_mm: float = 2.0,

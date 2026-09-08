@@ -148,7 +148,7 @@ flowers:
 - `HexDef.height_level` drives the interior since 2026-09 (`terrain/field.py`). The corner-mismatch risk that stalled this earlier is handled by construction: the level blend is a global function of position, and a plateau's flat pad is a mask that is zero on every hex edge.
 - Magnet bores: done (2026-09, `terrain/magnets.py`). The terrain walls now run straight to the print bed 10 mm below level 0 (`BASE_PLATE_DEPTH_MM`, physical millimetres) and each of the 18 silhouette edges gets a blind 5.3 × 2.2 mm bore centred 3.9 mm above the bed, cut into the wall as a structured radial-sector collar (no ear-clipping, no boolean). The boundary's XY jitter is switched off around each bore so the wall there is planar.
 - Standability is decided up front: `pick_standable_hexes(seed, min_standable)` chooses which hexes get a flat pad, and `terrain/standability.py` then confirms them on the real mesh (central 40% of the hex flat within 1 mm). A plateau a road or river reaches is not standable and gets no socket.
-- Road and river edges are sampled by the hex lattice (about 3.2 mm at the default 8 subdivisions per edge), so a road's 0.6 mm edge prints as a ramp one lattice step wide; the outline is not embedded as mesh edges.
+- Road and river edges are sampled by the hex lattice (about 1.6 mm at the default 16 subdivisions per edge), so a road's 0.6 mm edge prints as a ramp one lattice step wide; the outline is not embedded as mesh edges.
 
 ## Explicitly out of scope
 

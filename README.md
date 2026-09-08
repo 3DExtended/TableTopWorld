@@ -54,8 +54,8 @@ Always run commands with the venv active, or prefix with `.venv/bin/python`.
 # The preview scene (every entry in preview_map, placed on the flower grid)
 .venv/bin/python -m terrain.cli render preview --output output/preview.stl
 
-# Finer mesh (default 8 subdivisions per hex edge)
-.venv/bin/python -m terrain.cli render flower hill_peak --subdivisions-per-edge 16 --output output/flower_hill_peak.stl
+# Coarser or finer mesh (default 16 subdivisions per hex edge; a road edge is one lattice step wide)
+.venv/bin/python -m terrain.cli render flower hill_peak --subdivisions-per-edge 8 --output output/flower_hill_peak.stl
 ```
 
 Every export is gated by `terrain/export.py`: the mesh must be watertight,

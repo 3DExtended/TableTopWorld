@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     flower.add_argument(
         "--subdivisions-per-edge",
         type=int,
-        default=8,
+        default=16,
         help="mesh detail along each hex edge, higher = smoother/more triangles (default: 8)",
     )
     flower.set_defaults(func=_cmd_render_flower)
@@ -119,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     preview.add_argument(
         "--subdivisions-per-edge",
         type=int,
-        default=8,
+        default=16,
         help="mesh detail along each hex edge, higher = smoother/more triangles (default: 8)",
     )
     preview.set_defaults(func=_cmd_render_preview)
