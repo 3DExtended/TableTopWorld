@@ -279,6 +279,18 @@ def validate_tileset(tileset: Tileset, layout: FlowerLayout | None = None) -> No
                     f"flower {flower.id!r}: road/water entry and exit junction "
                     f"must differ, got {road_or_water.entry}"
                 )
+            if (road_or_water.exit - road_or_water.entry) % FlowerLayout.SIDE_COUNT in (1, 5):
+                # A path enters along the middle edge's normal and must leave
+                # along the exit side's, which for adjacent sides differ by
+                # 120 degrees whatever hexes it visits in between - a bend
+                # tighter than a road or river is wide (terrain/field.py
+                # rounds bends with a 15 mm fillet; the sharpest it can round
+                # inside a 22.5 mm leg is 60 degrees).
+                raise TilesetError(
+                    f"flower {flower.id!r}: road/water cannot leave through side "
+                    f"{road_or_water.exit}, adjacent to its entry side {road_or_water.entry} "
+                    "(a 120-degree bend); use the opposite side or the two next to it"
+                )
 
     by_position = {p.at: p for p in tileset.preview_map}
     for placement in tileset.preview_map:

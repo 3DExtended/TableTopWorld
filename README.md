@@ -51,7 +51,13 @@ Always run commands with the venv active, or prefix with `.venv/bin/python`.
 # One flower from tilesets/default.yaml → output/flower_<id>.stl
 .venv/bin/python -m terrain.cli render flower crossroads --output output/flower_crossroads.stl
 
-# The preview scene (every entry in preview_map, placed on the flower grid)
+# The 19-flower landscape (tilesets/landscape.yaml) as one scene, to look at
+.venv/bin/python -m terrain.cli render preview --tileset tilesets/landscape.yaml --output output/landscape.stl
+
+# The same landscape as one STL per flower, to print: output/landscape/<id>.stl + README.md saying where each goes
+.venv/bin/python -m terrain.cli render tileset --tileset tilesets/landscape.yaml --output-dir output/landscape
+
+# The sample-flower preview scene (every entry in default.yaml's preview_map)
 .venv/bin/python -m terrain.cli render preview --output output/preview.stl
 
 # Coarser or finer mesh (default 16 subdivisions per hex edge; a road edge is one lattice step wide)
@@ -63,7 +69,10 @@ winding-consistent and of positive volume, or nothing is written. The CLI
 also prints how many of the 7 hexes are standable in the real mesh.
 
 `scripts/render_mesh.py` renders a PNG (top-down and isometric, light-shaded)
-of an STL for a quick visual check without a GPU.
+of an STL for a quick visual check without a GPU. `scripts/annotate_sides.py`
+draws a tileset's preview from above with every flower side coloured by its
+mating class (corner-height profile plus road/river crossing): equal letters
+are sides that could be placed against each other.
 
 ## Tilesets
 
@@ -80,6 +89,16 @@ neighbour, and that adjacent sides of one flower agree on their shared
 corner. Sample flowers: `flat_plains`, `hill_peak` (a cliff on one side),
 `crossroads` (a road and a river that ford at the centre hex),
 `river_bend` (a river through level-0 ground plus a road).
+
+**`tilesets/landscape.yaml`** is a 19-flower landscape (a hexagon of
+flowers, radius 2 on the flower grid) written by `scripts/gen_landscape.py`:
+every hex level and corner height is sampled from one continuous elevation
+field, so all 42 seams match by construction. A river meanders from the west
+edge to the east edge through a level-0 valley, hills rise to level 3 in the
+north-east and west, and a road runs south to north and fords the river in
+the centre column. Edit the script (hills, valley, the river and road
+routes) and rerun it; a test checks the committed YAML is what the script
+produces. `render tileset` writes the 19 printable STLs into a folder.
 
 ## How a flower is built
 
@@ -102,11 +121,12 @@ corner. Sample flowers: `flat_plains`, `hill_peak` (a cliff on one side),
 .venv/bin/python -m pytest -q
 ```
 
-About 90 tests, all against real constructed geometry: watertightness and
+About 100 tests, all against real constructed geometry: watertightness and
 winding across mesh resolutions, the cross-flower boundary contract
 (point-by-point along a shared side), bore and socket positions and
-volumes, pad flatness, road and river profiles, and road continuity across
-the crossroads/river_bend seam.
+volumes, pad flatness, road and river profiles, road continuity across
+the crossroads/river_bend seam, and the landscape's 42 seams and 9
+road/river crossings.
 
 ## Project layout
 
