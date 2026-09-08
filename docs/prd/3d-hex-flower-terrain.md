@@ -91,7 +91,8 @@ pipeline's breakage go undetected for a long time.
 | `terrain/triangulate.py` | Thin wrapper around `mapbox_earcut` (ear-clipping) and a point-in-polygon test, isolating the third-party triangulation dependency |
 | `terrain/roads.py` | Road/river centerlines starting/ending exactly at side-corner positions, split via ear-clipping into two boundary-preserving regions |
 | `terrain/surface_mesh.py` | Triangulates the PSLG (or road/groove variants), lifts to Z, returns a `trimesh.Trimesh` — or, for assembly, an open solid with no bottom cap |
-| `terrain/base_plate.py` | Flat basement layer welded onto the terrain's own bottom rim via shared vertex indices (no boolean union); floor cap + 6 wall panels |
+| `terrain/base_plate.py` | Floor on the print bed, mirrored from the top surface onto its own bottom vertex copies (no boolean union, no ear-clipping) |
+| `terrain/magnets.py` | 18 blind magnet bores (5.3 × 2.2 mm, centred 3.9 mm above the bed) cut into the walls at every silhouette edge's midpoint, as structured radial-sector collars |
 | `terrain/standability.py` | Post-generation check of which hex cells are flat within tolerance in the real mesh, vs. the tileset's configured minimum |
 | `terrain/assembly.py` | `build_flower_mesh()` (terrain + base plate, one welded solid), `build_preview_mesh()` (every `preview_map` flower placed and concatenated into one scene) |
 | `terrain/export.py` | STL writer gated on `is_watertight` / `is_winding_consistent` / positive volume |
@@ -146,7 +147,7 @@ flowers:
 ## Out of Scope
 
 - Auto-layout / CSP map generator
-- Magnet **bore** geometry (a true blind recess needs real wall thickness — offset inner/outer faces — which the current single-sheet wall panel doesn't have yet; deferred, tracked in `terrain/base_plate.py`'s module docstring)
+- Top-face magnet sockets on standable hexes (the wall bores are done; see `terrain/magnets.py`)
 - `HexDef.height_level` currently has no effect on generated geometry beyond validation — only `side_corner_heights` (boundary) and `seed` (interior) drive the mesh; flagged, not silently assumed
 - Bridges (road + water on the same corner)
 - Single-hex prints, web UI, game rules engine

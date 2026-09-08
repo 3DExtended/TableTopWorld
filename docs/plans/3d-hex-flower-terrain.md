@@ -49,7 +49,8 @@ flowchart TB
     Tri[terrain/triangulate.py - earcut wrapper]
     Roads[terrain/roads.py - cross-flower road/river]
     Surface[terrain/surface_mesh.py - Trimesh top+walls]
-    Plate[terrain/base_plate.py - welded flat base + magnets]
+    Plate[terrain/base_plate.py - floor on the print bed]
+    Bores[terrain/magnets.py - 18 blind wall bores]
     Standability[terrain/standability.py - post-gen flatness check]
     Export[terrain/export.py - watertight-gated STL]
   end
@@ -141,7 +142,7 @@ flowers:
 ## Known, deliberately-flagged gaps (not hidden)
 
 - `HexDef.height_level` is validated but not yet consumed by the mesh pipeline (only `side_corner_heights` and `seed` affect geometry) — wiring it in was attempted and reverted once, since anchoring a hex's interior noise to its own declared level risks the exact corner-Z-mismatch bug class the boundary code was carefully built to avoid, for any two neighbor hexes with *different* declared levels.
-- Magnet bore geometry is deferred — base plate wall panels are currently solid (holeless); a true blind recess needs real wall thickness (offset inner/outer faces), a separate follow-up task. `terrain/base_plate.py` already validates `plate_depth` has room for the magnet, and `terrain.triangulate.earcut_triangulate_with_holes()` is in place as a working primitive for whoever picks this up.
+- Magnet bores: done (2026-09, `terrain/magnets.py`). The terrain walls now run straight to the print bed 10 mm below level 0 (`BASE_PLATE_DEPTH_MM`, physical millimetres) and each of the 18 silhouette edges gets a blind 5.3 × 2.2 mm bore centred 3.9 mm above the bed, cut into the wall as a structured radial-sector collar (no ear-clipping, no boolean). The boundary's XY jitter is switched off around each bore so the wall there is planar.
 - Default relief parameters (`jitter_amplitude=0.3`, `interior_relief_mm=6.0`) are large enough relative to the standability flatness tolerance (1.0mm) that even a uniform-height flower has 0 standable hexes under *default* build parameters — decision #11 explicitly permits 0, but it's worth knowing this is the common case at default settings, not just the deliberate `hill_peak` case.
 
 ## Explicitly out of scope

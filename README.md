@@ -74,7 +74,7 @@ Flower definitions live in **`tilesets/default.yaml`**:
 - **`flowers.<id>`** — seven `hexes` (terrain level + role), eighteen `edges` (profile names), optional `roads` / `water`
 - **`preview_map`** — which flowers to place in `render preview`
 
-Terrain levels in YAML: `ground` = 0, `middle` = 4, `high` = 8 (gameplay / step heights). **Mesh** builds from the print bed at **`z = 0`**: ground-level hexes are `BASE_PLATE_DEPTH` (2.0) tall so exterior walls reach the fixed magnet height; middle/high hexes extrude to 4 and 8. Magnets are always at **`MAGNET_CENTER_Z`** (~0.78 model units above the bed). Values are multiplied by `meta.scale` for export (default 5×).
+Height levels are 15 mm apart (`meta.heights`), with level 0 at **`z = 0`**. The print bed sits **`BASE_PLATE_DEPTH_MM`** (10 mm) below that: every flower's walls run straight down to it, giving the flat "basement" all tiles share. Each of the 18 silhouette edges carries one blind magnet bore at its midpoint, 5.3 mm diameter and 2.2 mm deep (for 5 × 2 mm disc magnets), centred **`MAGNET_CENTER_Z_MM`** (3.9 mm) above the bed - physical millimetres, never scaled. Only the hex layout is multiplied by `meta.scale` (default 5×, giving a 45 mm across-flats hex).
 
 ## Test
 

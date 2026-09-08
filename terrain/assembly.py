@@ -10,14 +10,11 @@ from __future__ import annotations
 import numpy as np
 import trimesh
 
-from terrain.base_plate import build_base_plate_parts
+from terrain.base_plate import build_floor_cap
 from terrain.boundary_noise import hash_to_unit_interval
-from terrain.constants import (
-    BASE_PLATE_DEPTH,
-    MAGNET_CENTER_Z,
-    MAGNET_RADIUS,
-)
+from terrain.constants import BASE_PLATE_DEPTH_MM
 from terrain.layout import FlowerLayout
+from terrain.magnets import DEFAULT_MAGNET_BORES, MagnetBores
 from terrain.standability import check_min_standable_hexes
 from terrain.surface_mesh import build_flower_open_solid
 from terrain.tileset import Tileset
@@ -74,16 +71,17 @@ def build_flower_mesh(
     groove_width_mm: float = 6.0,
     groove_profile: list[tuple[float, float]] | None = None,
     standable_hexes: int | None = None,
-    plate_depth: float = BASE_PLATE_DEPTH,
-    magnet_center_z: float = MAGNET_CENTER_Z,
-    magnet_radius: float = MAGNET_RADIUS,
+    plate_depth_mm: float = BASE_PLATE_DEPTH_MM,
+    magnet_bores: MagnetBores | None = DEFAULT_MAGNET_BORES,
 ) -> trimesh.Trimesh:
     """Build one flower's complete printable solid: the terrain surface
-    (decisions #1-#10) welded directly to a flat base plate carrying the
-    magnet bores (decision #13), as one Trimesh - no boolean union (see
-    terrain/base_plate.py's own docstring for why, and how the weld
-    actually works: shared vertex indices at the flat bottom rim, not two
-    independently-capped solids glued together).
+    (decisions #1-#10) whose walls run straight down to the print bed at
+    z = -plate_depth_mm (the flat "basement" of decision #13, physical
+    millimetres - never scaled), closed by a floor cap, with one blind
+    magnet bore per silhouette edge cut into those walls (terrain/magnets.py).
+    One Trimesh, no boolean union anywhere: the floor shares the walls'
+    own bottom-rim vertex indices, and the bore patches share the wall
+    quads' rim vertices (see terrain/base_plate.py for why that matters).
 
     A flower's declared roads (tileset.py's FlowerDef.roads) are passed
     straight through as road_water_side_pairs; only one road per flower is
@@ -95,11 +93,18 @@ def build_flower_mesh(
     flower = tileset.flowers[flower_id]
     layout = tileset.layout()
     level_z = tileset.meta.heights.z
-    bottom_z = -plate_depth
+    if magnet_bores is not None and plate_depth_mm < magnet_bores.min_plate_depth_mm:
+        raise ValueError(
+            f"plate_depth_mm={plate_depth_mm} is too shallow for the magnet bores: "
+            f"need at least {magnet_bores.min_plate_depth_mm:.2f} mm (bore top at "
+            f"{magnet_bores.top_above_bed_mm:.2f} mm plus a {magnet_bores.roof_mm} mm "
+            "roof up to the level-0 surface)"
+        )
+    bottom_z = -plate_depth_mm
 
     road_water_side_pairs = flower.roads + flower.water
 
-    vertices, faces, bottom_rim_indices = build_flower_open_solid(
+    solid = build_flower_open_solid(
         flower.side_corner_heights,
         layout,
         level_z,
@@ -122,24 +127,13 @@ def build_flower_mesh(
             )
         },
         road_water_side_pairs=road_water_side_pairs,
+        magnet_bores=magnet_bores,
     )
 
-    extra_vertices, plate_faces = build_base_plate_parts(
-        vertices,
-        bottom_rim_indices,
-        layout,
-        subdivisions_per_edge=subdivisions_per_edge,
-        bottom_z=bottom_z,
-        plate_depth=plate_depth,
-        magnet_center_z=magnet_center_z,
-        magnet_radius=magnet_radius,
-    )
-
-    all_vertices = vertices + extra_vertices
-    all_faces = faces + plate_faces
+    all_faces = solid.faces + build_floor_cap(solid.top_triangles, solid.top_count)
 
     return trimesh.Trimesh(
-        vertices=np.array(all_vertices), faces=np.array(all_faces), process=True
+        vertices=np.array(solid.vertices), faces=np.array(all_faces), process=True
     )
 
 

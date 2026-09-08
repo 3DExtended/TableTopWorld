@@ -1,24 +1,27 @@
-"""Phase 6: base plate + full assembly, welded into one printable solid.
+"""Phase 6: base plate + magnet bores + full assembly, one printable solid.
 
-Verifies the actual constructed geometry (watertight/winding/volume, plus
-the base-plate weld itself), not just that the functions run without
-raising.
+Verifies the actual constructed geometry (watertight/winding/volume, the
+plate depth, the bore positions and the removed bore volume), not just
+that the functions run without raising.
 """
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from terrain.assembly import (
     build_flower_mesh,
+    build_preview_mesh,
     pick_standable_hexes,
     standability_report,
 )
-from terrain.base_plate import build_base_plate_parts
-from terrain.constants import BASE_PLATE_DEPTH, MAGNET_CENTER_Z, MAGNET_RADIUS
+from terrain.constants import BASE_PLATE_DEPTH_MM, MAGNET_CENTER_Z_MM
 from terrain.layout import FlowerLayout
+from terrain.magnets import DEFAULT_MAGNET_BORES, MagnetBores
 from terrain.standability import hex_cell_z_range
 from terrain.tileset import load_tileset
 
@@ -170,19 +173,108 @@ def test_flat_plains_center_hex_is_standable(tileset) -> None:
     assert ok is True
 
 
-def test_base_plate_rejects_too_shallow_plate_for_the_magnet() -> None:
-    with pytest.raises(ValueError, match="plate_depth"):
-        build_base_plate_parts(
-            [],
-            [],
-            None,  # type: ignore[arg-type]
-            subdivisions_per_edge=8,
-            bottom_z=0.0,
-            plate_depth=MAGNET_CENTER_Z,  # too shallow: no room for the radius
-            magnet_center_z=MAGNET_CENTER_Z,
-            magnet_radius=MAGNET_RADIUS,
-        )
+def _expected_bore_centres(layout, bores: MagnetBores) -> list[tuple[float, float, float]]:
+    """The blind end's centre of each of the 18 bores: the silhouette
+    edge's midpoint pushed `depth_mm` INTO the flower, at the fixed
+    magnet height above the print bed."""
+    z = -BASE_PLATE_DEPTH_MM + bores.center_above_bed_mm
+    centres = []
+    for side in range(6):
+        corners = layout.side_corners(side)
+        for e in range(3):
+            (x0, y0), (x1, y1) = corners[e], corners[e + 1]
+            mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+            tx, ty = x1 - x0, y1 - y0
+            ox, oy = ty, -tx
+            if ox * mx + oy * my < 0:
+                ox, oy = -ox, -oy
+            norm = math.hypot(ox, oy)
+            ox, oy = ox / norm, oy / norm
+            centres.append((mx - ox * bores.depth_mm, my - oy * bores.depth_mm, z))
+    return centres
 
 
-def test_base_plate_default_depth_fits_the_magnet() -> None:
-    assert BASE_PLATE_DEPTH > MAGNET_CENTER_Z + MAGNET_RADIUS
+def test_plate_is_ten_millimetres_deep_in_real_millimetres(tileset) -> None:
+    """The print bed sits BASE_PLATE_DEPTH_MM below the level-0 surface -
+    a physical distance that must not scale with meta.scale (until 2026-09
+    the plate constants were in model units and never scaled, silently
+    giving a 2 mm plate)."""
+    mesh = build_flower_mesh(tileset, "flat_plains")
+    assert BASE_PLATE_DEPTH_MM == 10.0
+    assert float(mesh.vertices[:, 2].min()) == pytest.approx(-BASE_PLATE_DEPTH_MM)
+
+
+@pytest.mark.parametrize("flower_id", ["flat_plains", "hill_peak"])
+def test_every_silhouette_edge_carries_one_blind_magnet_bore(tileset, flower_id: str) -> None:
+    """18 bores (one per exterior edge), each a blind recess of the right
+    depth at the fixed magnet height: the blind end's centre vertex must
+    exist in the welded mesh at exactly the expected position, and the
+    solid stays watertight around every one of them."""
+    layout = tileset.layout()
+    mesh = build_flower_mesh(tileset, flower_id)
+    assert mesh.is_watertight and mesh.is_winding_consistent
+    verts = np.asarray(mesh.vertices)
+    expected = _expected_bore_centres(layout, DEFAULT_MAGNET_BORES)
+    assert len(expected) == 18
+    for cx, cy, cz in expected:
+        d = np.linalg.norm(verts - np.array([cx, cy, cz]), axis=1)
+        assert d.min() < 1e-6, (flower_id, (cx, cy, cz), d.min())
+    assert MAGNET_CENTER_Z_MM == 3.9
+
+
+def test_magnet_bores_remove_their_cylinder_volume(tileset) -> None:
+    """The bores are real cavities, not decoration: the solid built with
+    bores is lighter than the same solid without them by 18 blind
+    cylinders (a 24-gon prism, hence the tolerance)."""
+    with_bores = build_flower_mesh(tileset, "flat_plains")
+    without = build_flower_mesh(tileset, "flat_plains", magnet_bores=None)
+    assert without.is_watertight and with_bores.is_watertight
+    b = DEFAULT_MAGNET_BORES
+    expected = 18 * math.pi * b.radius_mm**2 * b.depth_mm
+    removed = without.volume - with_bores.volume
+    assert removed == pytest.approx(expected, rel=0.05)
+
+
+def test_neighbouring_flowers_bores_face_each_other(tileset) -> None:
+    """Two flowers placed as preview_map neighbours must present their
+    bores at the same physical points along the shared side, so the
+    magnets actually meet: each of this side's 3 bore mouths (edge
+    midpoint at magnet height) coincides for both flowers, and the
+    two blind ends sit depth_mm apart on opposite sides of the seam."""
+    layout = tileset.layout()
+    b = DEFAULT_MAGNET_BORES
+    z = -BASE_PLATE_DEPTH_MM + b.center_above_bed_mm
+    placements = {p.id: p for p in tileset.preview_map}
+    assert len(placements) == 2
+    ends: dict[str, list[np.ndarray]] = {}
+    for pid, placement in placements.items():
+        mesh = build_flower_mesh(tileset, pid)
+        x, y = layout.flower_grid_to_xy(*placement.at)
+        centres = np.array(_expected_bore_centres(layout, b)) + np.array([x, y, 0.0])
+        ends[pid] = list(centres)
+    a, c = ends.values()
+    pairs = 0
+    for pa in a:
+        for pc in c:
+            d = np.linalg.norm(pa - pc)
+            if abs(d - 2 * b.depth_mm) < 1e-6:
+                mouth = (pa + pc) / 2
+                assert mouth[2] == pytest.approx(z)
+                pairs += 1
+    assert pairs == 3
+
+
+def test_too_shallow_plate_is_rejected(tileset) -> None:
+    with pytest.raises(ValueError, match="too shallow"):
+        build_flower_mesh(tileset, "flat_plains", plate_depth_mm=MAGNET_CENTER_Z_MM)
+
+
+def test_default_plate_depth_leaves_a_roof_over_the_bore() -> None:
+    b = DEFAULT_MAGNET_BORES
+    assert b.top_above_bed_mm == pytest.approx(3.9 + 2.65)
+    assert BASE_PLATE_DEPTH_MM >= b.min_plate_depth_mm
+
+
+def test_preview_scene_still_assembles_with_bores(tileset) -> None:
+    scene = build_preview_mesh(tileset)
+    assert scene.volume > 0

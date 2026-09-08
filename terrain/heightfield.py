@@ -45,8 +45,16 @@ def build_side_boundary_vertices(
     subdivisions_per_edge: int = 8,
     jitter_amplitude: float = 0.3,
     xy_jitter_mm: float = 0.0,
+    flat_window_mm: float = 0.0,
 ) -> list[Vertex3D]:
     """Build the fine, jagged 3D contour along one flower side.
+
+    `flat_window_mm` > 0 switches the XY jitter off within that distance
+    of each edge's midpoint (fading back in over the next 2 mm), so the
+    wall there is one vertical plane a magnet bore can be cut into
+    (terrain/magnets.py). It is a function of distance from the midpoint
+    only, hence symmetric under the neighbour's reversed walk - decision
+    #4's bit-identical contract is unaffected.
 
     Pure deterministic function of (corner_heights, side_geom, subdivision
     count) only - same inputs always produce bit-identical output (design
@@ -128,6 +136,10 @@ def build_side_boundary_vertices(
                 corner_heights, float(global_pos), total_positions, channel=1
             )
             offset = xy_jitter * window * xy_jitter_mm
+            if flat_window_mm > 0.0:
+                from_mid = abs((t - 0.5) * edge_len)
+                fade = min(1.0, max(0.0, (from_mid - flat_window_mm) / 2.0))
+                offset *= fade * fade * (3.0 - 2.0 * fade)
             x = base_x + perp_x * offset
             y = base_y + perp_y * offset
             vertices.append((x, y, z))
@@ -142,6 +154,7 @@ def build_flower_boundary_loop(
     subdivisions_per_edge: int = 8,
     jitter_amplitude: float = 0.3,
     xy_jitter_mm: float = 0.0,
+    xy_flat_window_mm: float = 0.0,
 ) -> list[Vertex3D]:
     """The full closed flower boundary contour: one build_side_boundary_vertices
     run per side, concatenated. FlowerLayout.side_corners()'s 6 sides chain
@@ -161,6 +174,7 @@ def build_flower_boundary_loop(
             subdivisions_per_edge=subdivisions_per_edge,
             jitter_amplitude=jitter_amplitude,
             xy_jitter_mm=xy_jitter_mm,
+            flat_window_mm=xy_flat_window_mm,
         )
         loop.extend(verts[:-1])
     return loop
@@ -201,6 +215,7 @@ def build_flower_pslg(
     subdivisions_per_edge: int = 8,
     jitter_amplitude: float = 0.3,
     xy_jitter_mm: float = 0.0,
+    xy_flat_window_mm: float = 0.0,
     interior_grid_step: float | None = None,
     interior_relief_mm: float = 6.0,
 ) -> tuple[list[Point2D], list[Vertex3D], int]:
@@ -222,6 +237,7 @@ def build_flower_pslg(
         subdivisions_per_edge=subdivisions_per_edge,
         jitter_amplitude=jitter_amplitude,
         xy_jitter_mm=xy_jitter_mm,
+        xy_flat_window_mm=xy_flat_window_mm,
     )
     boundary_2d = [(v[0], v[1]) for v in boundary_3d]
     # Corner samples (one per declared side corner, at every
@@ -262,6 +278,7 @@ def build_flower_cells(
     subdivisions_per_edge: int = 8,
     jitter_amplitude: float = 0.3,
     xy_jitter_mm: float = 0.0,
+    xy_flat_window_mm: float = 0.0,
     interior_relief_mm: float = 6.0,
     groove_depth_mm: float = 0.0,
     groove_width_mm: float = 2.0,
@@ -381,6 +398,7 @@ def build_flower_cells(
             subdivisions_per_edge=subdivisions_per_edge,
             jitter_amplitude=jitter_amplitude,
             xy_jitter_mm=xy_jitter_mm,
+            flat_window_mm=xy_flat_window_mm,
         )
 
     # local_edge_idx -> (fine 3D points, (side_idx, abs start position in
