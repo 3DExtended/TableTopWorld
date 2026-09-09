@@ -106,8 +106,9 @@ Flower definitions live in **`tilesets/default.yaml`**:
 Two flowers may share a side only if their corner-height sequences match
 once reversed; `load_tileset()` validates that for every adjacent pair in
 `preview_map`, that a road or river leaving a flower continues in its
-neighbour, and that adjacent sides of one flower agree on their shared
-corner. Sample flowers: `flat_plains`, `hill_peak` (a cliff on one side),
+neighbour, that adjacent sides of one flower agree on their shared corner,
+and that a road changes at most one level per hex along its route (crossing
+height, ring hex, centre hex, ring hex, crossing height). Sample flowers: `flat_plains`, `hill_peak` (a cliff on one side),
 `crossroads` (a road and a river that ford at the centre hex),
 `river_bend` (a river through level-0 ground plus a road).
 

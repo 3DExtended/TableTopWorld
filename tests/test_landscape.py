@@ -204,6 +204,54 @@ def test_preview_volume_is_the_sum_of_its_flowers(tileset, meshes) -> None:
     assert preview.volume == pytest.approx(sum(m.volume for m in meshes.values()), rel=1e-6)
 
 
+def _single_flower_yaml(levels, roads="[]", water="[]") -> str:
+    hexes = "\n".join(f'      "{h}": {{ height_level: {lvl} }}' for h, lvl in enumerate(levels))
+    sides = "\n".join(f"      {k}: [0, 0, 0, 0]" for k in range(6))
+    return "\n".join(
+        [
+            "meta:",
+            "  height_step_mm: 15",
+            "  level_count: 4",
+            "  scale: 5",
+            "  hex_outer_width: 5.1961525",
+            "  min_standable_hexes: 1",
+            "preview_map: []",
+            "flowers:",
+            "  steep:",
+            "    hexes:",
+            hexes,
+            "    side_corner_heights:",
+            sides,
+            "    seed: 7",
+            f"    roads: {roads}",
+            f"    water: {water}",
+            "",
+        ]
+    )
+
+
+def test_a_road_climbing_two_levels_in_one_hex_is_rejected(tmp_path) -> None:
+    """Peter's rule: a road may change at most one level per hex. The
+    centre hex at level 2 between level-0 ring hexes is a 30 mm step."""
+    path = tmp_path / "steep.yaml"
+    path.write_text(_single_flower_yaml([2, 0, 0, 0, 0, 0, 0], roads="[[0, 3]]"))
+    with pytest.raises(TilesetError, match="at most 1 level per hex"):
+        load_tileset(path)
+    path.write_text(_single_flower_yaml([1, 0, 0, 0, 0, 0, 0], roads="[[0, 3]]"))  # one level per hex: fine
+    load_tileset(path)
+    path.write_text(_single_flower_yaml([2, 0, 0, 0, 0, 0, 0], water="[[0, 3]]"))  # rivers may fall
+    load_tileset(path)
+
+
+def test_every_generated_road_climbs_at_most_one_level_per_hex(tileset) -> None:
+    from terrain.tileset import path_stations
+
+    for flower in tileset.flowers.values():
+        for road in flower.roads:
+            levels = [level for _, level in path_stations(flower, road)]
+            assert max(abs(b - a) for a, b in zip(levels, levels[1:])) <= 1, (flower.id, levels)
+
+
 def test_a_path_leaving_through_an_adjacent_side_is_rejected(tmp_path) -> None:
     """Entering along one middle edge's normal and leaving along the next
     side's is a 120-degree bend, tighter than any road or river is wide."""

@@ -253,6 +253,39 @@ _NEIGHBOR_GRID_DELTAS: tuple[tuple[int, int], ...] = (
 )
 
 
+MAX_ROAD_STEP_LEVELS = 1
+
+
+def path_stations(flower: FlowerDef, path: PathDecl) -> list[tuple[str, float]]:
+    """(name, level) of everything a road or river passes, in order: the
+    entry crossing (the mean of the middle edge's two corner levels), each
+    hex of its route, the exit crossing."""
+
+    def crossing(side: int) -> float:
+        corners = flower.side_corner_heights[side]
+        return 0.5 * (corners[1] + corners[2])
+
+    stations = [(f"side {path.entry}", crossing(path.entry))]
+    for h in FlowerLayout.path_route(path.entry, path.exit, path.via):
+        stations.append((f"hex {h}", float(flower.hexes[str(h)].height_level)))
+    stations.append((f"side {path.exit}", crossing(path.exit)))
+    return stations
+
+
+def _check_road_grade(flower: FlowerDef, road: PathDecl) -> None:
+    """A road may change at most MAX_ROAD_STEP_LEVELS per hex: its bed
+    follows the terrain, so a two-level step is a 30 mm ramp inside one
+    blend band, a wall no miniature walks up. Rivers are not held to this."""
+    stations = path_stations(flower, road)
+    for (a, la), (b, lb) in zip(stations, stations[1:]):
+        if abs(lb - la) > MAX_ROAD_STEP_LEVELS + 1e-9:
+            raise TilesetError(
+                f"flower {flower.id!r}: road from side {road.entry} to side {road.exit} changes "
+                f"{abs(lb - la):g} levels between {a} (level {la:g}) and {b} (level {lb:g}); "
+                f"a road may change at most {MAX_ROAD_STEP_LEVELS} level per hex"
+            )
+
+
 def validate_tileset(tileset: Tileset, layout: FlowerLayout | None = None) -> None:
     """Structural validation, plus preview_map cross-flower side matching
     (decision #3/#4's reversed-declaration contract) now that
@@ -291,6 +324,8 @@ def validate_tileset(tileset: Tileset, layout: FlowerLayout | None = None) -> No
                     f"{road_or_water.exit}, adjacent to its entry side {road_or_water.entry} "
                     "(a 120-degree bend); use the opposite side or the two next to it"
                 )
+            if any(road_or_water is road for road in flower.roads):
+                _check_road_grade(flower, road_or_water)
 
     by_position = {p.at: p for p in tileset.preview_map}
     for placement in tileset.preview_map:

@@ -376,10 +376,7 @@ class TerrainField:
         c_in, c_out = self._crossing(entry), self._crossing(exit_)
         ring_in = entry + 1  # side k's middle edge belongs to ring hex k+1
         ring_out = exit_ + 1
-        route = [ring_in, *via, ring_out]
-        if not via and ring_in != ring_out and (exit_ - entry) % FlowerLayout.SIDE_COUNT not in (1, 5):
-            route = [ring_in, 0, ring_out]  # not adjacent: go through the centre hex
-        route = [h for i, h in enumerate(route) if i == 0 or h != route[i - 1]]
+        route = FlowerLayout.path_route(entry, exit_, via)
         # The crossing sits on the ring hex's own edge, so crossing -> ring
         # centre is a straight leg along the edge normal; with the fillet
         # radius below an apothem the path stays exactly perpendicular to

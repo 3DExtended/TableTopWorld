@@ -338,6 +338,18 @@ class FlowerLayout:
             bucket.sort(key=lambda e: signed_diff(edge_angle(e), center))
         return buckets
 
+    @classmethod
+    def path_route(cls, entry: int, exit_side: int, via: Sequence[int] = ()) -> list[int]:
+        """Hex cells a road or river visits between the middle edges of
+        sides `entry` and `exit_side`: the ring hex behind each side, any
+        `via` hexes between them, and the centre hex when the two sides are
+        not adjacent and no via is given. Consecutive repeats are dropped."""
+        ring_in, ring_out = entry + 1, exit_side + 1
+        route = [ring_in, *via, ring_out]
+        if not via and ring_in != ring_out and (exit_side - entry) % cls.SIDE_COUNT not in (1, 5):
+            route = [ring_in, 0, ring_out]
+        return [h for i, h in enumerate(route) if i == 0 or h != route[i - 1]]
+
     @staticmethod
     def side_id(side_idx: int) -> str:
         return f"side-{side_idx}"
