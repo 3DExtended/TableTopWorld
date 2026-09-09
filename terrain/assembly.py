@@ -67,7 +67,7 @@ def build_flower_mesh(
     *,
     subdivisions_per_edge: int = 16,
     jitter_amplitude: float = 0.05,
-    xy_jitter_mm: float = 1.0,
+    xy_jitter_mm: float = 0.0,
     interior_relief_mm: float = 2.0,
     include_hex_grooves: bool = True,
     groove_depth_mm: float = 0.6,
@@ -96,6 +96,15 @@ def build_flower_mesh(
     prototype Peter approved from scripts/gen_groove_prototypes.py); the
     V only forms where two hexes or two flowers meet, a lone silhouette
     edge reads as a "/" skirt.
+
+    The walls are flat: `xy_jitter_mm` is 0, so every one of the 18
+    silhouette edges is one vertical plane from its top contour down to
+    the bed, and two flowers sit flush against each other. (It used to be
+    1 mm, which bowed each wall in and out by up to 0.6 mm between the
+    bore's flat window and the corners - Peter, 2026-09-09: "i dont
+    understand why the connecting faces of the hex flowers are not
+    flat".) The top contour still carries its Z jitter; that is the
+    shared, deterministic silhouette both neighbours reproduce.
 
     The interior comes from terrain/field.py (flat pads, S-curve bands,
     sinuous fronts, organic relief of `interior_relief_mm`), which also

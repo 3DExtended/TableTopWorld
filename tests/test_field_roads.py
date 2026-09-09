@@ -230,7 +230,7 @@ def test_road_continues_across_the_crossroads_river_bend_seam(tileset) -> None:
     def rim_on_side(mesh, v, corners):
         """The silhouette rim along the side: vertices shared by a vertical
         (wall) face and an upward (top) face, within 1.5 mm of the side's
-        three edges (the contour's XY jitter is 1 mm). Not every top
+        three edges (the walls are flat, the tolerance is slack). Not every top
         vertex near the edge: the hex-line strip's inset row runs 0.5 mm
         inside each flower and cannot coincide by design; and not every
         wall vertex: the bore collars' ray hits land where each bore's
